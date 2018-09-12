@@ -17,27 +17,25 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 
 ## Features
 ### Implemented:
-- Able to resume partial download with no duplicate work
-- Accepting incoming connections from peers
-- Computes & sends initial bitfield message to peers
-- Hash checking to verify that each piece received is valid
-- Is able to seed & leach from itself
-- Never downloads the same piece twice.
-- Only requests a piece from a peer if it already knows the peer has the piece.
-- Parallel leaching & seeding
-- Property & unit tests for parsing logic
-- Reading single torrent
-- Tracks if peer is choking and does not request pieces if peer is choking
-- Tracks which pieces each peer has by parsing have & bitfield messages.
+- [x] Able to resume partial download with no duplicate work
+- [x] Accepting incoming connections from peers
+- [x] Computes & sends initial bitfield message to peers
+- [x] Hash checking to verify that each piece received is valid
+- [x] Is able to seed & leach from itself
+- [x] Never downloads the same piece twice.
+- [x] Only requests a piece from a peer if it already knows the peer has the piece.
+- [x] Parallel leaching & seeding
+- [x] Property & unit tests for parsing logic
+- [x] Reading single torrent
+- [x] Tracks if peer is choking and does not request pieces if peer is choking
+- [x] Tracks which pieces each peer has by parsing have & bitfield messages.
 
 ### TODO (next to be implemented):
 - Fix seeding issue. Issue manifests if 2 HTorrent clients are running on different computers, A with all the file, and B with none of the file. If A connects first, B will not make forward progress. I think the problem is that B's call to A never works b/c A's TCP server is bound to the loopback interface.
-- Fix tests
-- Split project out into standalone Github repo.
-- Profiling to see the cause of high CPU & memory usage
 - Publishing have messages to all peers as pieces complete
 - Support for large single files (currently hits an out of memory error when trying to download 10 GB file)
-- Refactor FSM logic, which is the same regardless of whether connection is initiated by peer or HTorrent, out of Peer module & into an FSM module
+- Profiling to see the cause of high CPU & memory usage
+- Refactor FSM logic, which is the same regardless of whether connection is initiated by peer or HTorrent, out of Peer module & into an FSM module. During this step, also refactor out any test code outside of the test directory.
 - Add CI/CD
 
 ### Not (yet?) Implemented:

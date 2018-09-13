@@ -41,7 +41,6 @@ import qualified Control.Exception as E
 import qualified System.Posix.IO as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 import qualified System.Posix.Files.ByteString as PosixFilesBS
-import Data.Attoparsec.ByteString
 
 newtype Conn e = Conn e deriving (Eq, Show)
 newtype InfoHash e = InfoHash e deriving (Eq, Show)

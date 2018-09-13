@@ -28,32 +28,6 @@ import qualified System.Posix.Files.ByteString as PosixFilesBS
 import qualified Control.Exception as E
 
 
--- data Tracker = Tracker (PeerId BS.ByteString)
---                        (Announce BS.ByteString)
---                        (PieceLength Integer)
---                        (Pieces [BS.ByteString])
---                        (InfoHash BS.ByteString)
---                        (SingleFileInfo)
---                        (Maybe DirectoryInfo)
---                        (Maybe (Encoding BS.ByteString))
---              deriving (Eq, Show)
--- data TrackerResponse = TrackerResponse (Peers [Peer])
---                                        (Maybe (TrackerId BS.ByteString))
---                                        (Maybe (Warning BS.ByteString))
---                                        (Interval Integer)
---                                        (Maybe (MinInterval Integer))
---                                        (Maybe (Complete BS.ByteString))
---                                        (Maybe (InComplete BS.ByteString)) deriving (Eq, Show)
-
--- data FileManagerState = FileManagerState (PeerId BS.ByteString)
---                                          (PieceLength Integer)
---                                          (Pieces Integer)
---                                          (BlockSize Integer) -- will set this to 16k
---                                          (DownloadedPieces (M.Map BS.ByteString (M.Map )))
-
---blockSize = 2^14 -- 16k
--- TODO: I am going to start off with only implementing this for a single file, in multifile mode I will need to maintain multiple files on the filesystem, I will deal with that once I have gotten single file downloads & uploads working.
-
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]
 getDefaultPieceMap tracker = (\piece -> (piece, False)) <$> getTrackerPieces tracker
 
@@ -126,7 +100,7 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
     co@(CheckOut (PeerThreadId peerThreadId) (PieceIndex i) timestmap) ->
       if M.member i checkouts then do
         --print $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
-        Chan.writeChan killChan ()
+        Chan.writeChan killChan $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         return (peers, pieceMap, checkouts)
       else do
         let new = M.insert i (peerThreadId, timestmap) checkouts
@@ -138,7 +112,7 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
 
       if isNothing look then do
         -- print $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
-        Chan.writeChan killChan ()
+        Chan.writeChan killChan $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         return (peers, pieceMap, checkouts)
       else do
         time <- Clock.getTime Clock.Monotonic
@@ -189,7 +163,7 @@ secToNanoSec = (*) 1000000000
 nanoSectoSec :: Integer -> Integer
 nanoSectoSec = (flip div) 1000000000
 
-setupFilesAndCreatePieceMap :: Tracker -> Chan.Chan () -> IO [(BS.ByteString, Bool)]
+setupFilesAndCreatePieceMap :: Tracker -> Chan.Chan String -> IO [(BS.ByteString, Bool)]
 setupFilesAndCreatePieceMap tracker killChan =  do
   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo tracker
   let fileName = UTF8.toString bsFileName
@@ -208,7 +182,7 @@ setupFilesAndCreatePieceMap tracker killChan =  do
 
   when (isNothing maybePieceMap2) $ do
     -- print "tracker is corrupt"
-    Chan.writeChan killChan ()
+    Chan.writeChan killChan "tracker is corrupt"
 
 
   return $ fromJust maybePieceMap2
@@ -240,7 +214,7 @@ getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
 secondsBetweenTrackerCalls :: TrackerResponse -> Int
 secondsBetweenTrackerCalls (TrackerResponse _ _ _ (Interval interval) _ _ _) = fromIntegral interval
 
-start :: Tracker.Tracker -> String -> Chan.Chan () -> IO ()
+start :: Tracker.Tracker -> String -> Chan.Chan String -> IO ()
 start tracker port killChan = do
 
   --putStrLn $ "ADDING WORK TO CHANNEL: " ++ (show workToBeDone)
@@ -263,7 +237,7 @@ start tracker port killChan = do
   -- print ("maybeTrackerResponse: " ++ show maybeTrackerResponse)
   when (isNothing maybeTrackerResponse) $ do
     -- print "ERROR: got empty tracker response"
-    Chan.writeChan killChan ()
+    Chan.writeChan killChan "ERROR: got empty tracker response"
 
   let trackerResponse = fromJust maybeTrackerResponse
   let peers = getPeers trackerResponse

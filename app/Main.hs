@@ -20,10 +20,12 @@ main = do
   args <- SE.getArgs
   killChan <- newChan
   let arg1:arg2:_ = args
+  putStrLn "Press Ctrl-C to quit"
   _ <- forkIO $ Lib.run arg1 arg2 killChan
-  _ <- installHandler keyboardSignal (Catch $ writeChan killChan ()) Nothing
+  _ <- installHandler keyboardSignal (Catch $ writeChan killChan "Quitting htorrent") Nothing
   exitOnQ killChan
 
 exitOnQ killChan = do
-    _ <- readChan killChan
+    msg <- readChan killChan
+    putStrLn msg
     exitSuccess

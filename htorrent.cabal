@@ -24,6 +24,7 @@ library
                      , FileManager
                      , Shared
   build-depends:       base >= 4.7 && < 5
+                     , attoparsec
                      , base16-bytestring
                      , binary
                      , bitwise
@@ -55,6 +56,7 @@ executable htorrent
                      , bytestring
                      , containers
                      , utf8-string
+                     , unix
   default-language:    Haskell2010
 
 test-suite htorrent-test

@@ -8,6 +8,7 @@ import Utils (unhex, shaHashRaw, shaHash)
 import qualified System.IO as SIO
 import qualified Control.Concurrent.Chan as Chan
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
 import qualified Data.Map as M
@@ -56,21 +57,21 @@ import qualified Control.Exception as E
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]
 getDefaultPieceMap tracker = (\piece -> (piece, False)) <$> getTrackerPieces tracker
 
-getFileHashes :: Tracker -> BS.ByteString -> Maybe [BS.ByteString]
+getFileHashes :: Tracker -> LBS.ByteString -> Maybe [BS.ByteString]
 getFileHashes tracker fileContents = do
   let singleFileInfo@(Tracker.SingleFileInfo _ (Tracker.Length fileLength) _) = getTrackerSingleFileInfo tracker
-  if (fromIntegral $ BS.length fileContents) /= fileLength then
+  if (fromIntegral $ LBS.length fileContents) /= fileLength then
     Nothing
   else
     Just $ L.unfoldr f fileContents
   where f x =
-          if BS.null x then
+          if LBS.null x then
             Nothing
           else
-            Just (shaHashRaw (BS.take pieceLength x), BS.drop pieceLength x)
+            Just (shaHashRaw (LBS.toStrict $ LBS.take pieceLength x), LBS.drop pieceLength x)
         pieceLength = fromIntegral $ getTrackerPieceLength tracker
 
-getCurrentPieceMap :: Tracker -> BS.ByteString -> Maybe [(BS.ByteString, Bool)]
+getCurrentPieceMap :: Tracker -> LBS.ByteString -> Maybe [(BS.ByteString, Bool)]
 getCurrentPieceMap tracker fileContent = do
   let pm = getDefaultPieceMap tracker
   let fh = getFileHashes tracker fileContent
@@ -194,26 +195,21 @@ setupFilesAndCreatePieceMap tracker killChan =  do
   let fileName = UTF8.toString bsFileName
   fileExists <- Dir.doesFileExist fileName
   unless fileExists $ do
-    -- print "creating file"
     createFile singleFileInfo
 
-  -- print "reading file"
-  fileContents <- BS.readFile fileName
-  -- print "read file"
+  fileContents <- LBS.readFile fileName
   let maybePieceMap = getCurrentPieceMap tracker fileContents
 
   when (isNothing maybePieceMap) $ do
-    -- print "file is invalid, wiping and starting fresh"
     createFile singleFileInfo
 
-  fileContents2 <- BS.readFile fileName
+  fileContents2 <- LBS.readFile fileName
   let maybePieceMap2 = getCurrentPieceMap tracker fileContents2
 
   when (isNothing maybePieceMap2) $ do
     -- print "tracker is corrupt"
     Chan.writeChan killChan ()
 
-  -- Dir.createDirectoryIfMissing False (fileName ++ "dir")
 
   return $ fromJust maybePieceMap2
 
@@ -381,13 +377,13 @@ test = do
     else
       print "is NOT an elem of pieces"
 
-test2 = do
-  Just t <- Tracker.testTracker2 "arch-spec-0.3.pdf.torrent"
-  let pieceList = getPieceList t
-  let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo t
-  let fileName = UTF8.toString bsFileName
-  fileContents <- BS.readFile fileName
-  let pieceMap = getCurrentPieceMap t fileContents
-  let filteredPieceList = maybe pieceList (\pm -> fst <$> filter (not . snd . snd) (zip pieceList pm)) pieceMap
-  print filteredPieceList
-  return filteredPieceList
+-- test2 = do
+--   Just t <- Tracker.testTracker2 "arch-spec-0.3.pdf.torrent"
+--   let pieceList = getPieceList t
+--   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo t
+--   let fileName = UTF8.toString bsFileName
+--   fileContents <- BS.readFile fileName
+--   let pieceMap = getCurrentPieceMap t fileContents
+--   let filteredPieceList = maybe pieceList (\pm -> fst <$> filter (not . snd . snd) (zip pieceList pm)) pieceMap
+--   print filteredPieceList
+--   return filteredPieceList

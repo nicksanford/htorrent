@@ -31,9 +31,10 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - [x] Tracks which pieces each peer has by parsing have & bitfield messages.
 
 ### TODO (next to be implemented):
+- Support for large single files (currently hits an out of memory error when trying to download 10 GB file)
+- Fix issue where if the tracker server doesn't exist, it does not just blow up. Report back `HTTP Call 'http call' to tracker server 'tracker server url'`
 - Fix seeding issue. Issue manifests if 2 HTorrent clients are running on different computers, A with all the file, and B with none of the file. If A connects first, B will not make forward progress. I think the problem is that B's call to A never works b/c A's TCP server is bound to the loopback interface.
 - Publishing have messages to all peers as pieces complete
-- Support for large single files (currently hits an out of memory error when trying to download 10 GB file)
 - Profiling to see the cause of high CPU & memory usage
 - Refactor FSM logic, which is the same regardless of whether connection is initiated by peer or HTorrent, out of Peer module & into an FSM module. During this step, also refactor out any test code outside of the test directory.
 - Add CI/CD

@@ -32,6 +32,7 @@ library
                      , clock
                      , containers
                      , cryptonite
+                     , deepseq
                      , directory
                      , filepath
                      , http-conduit
@@ -50,7 +51,7 @@ library
 executable htorrent
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -O2
   build-depends:       base
                      , htorrent
                      , bytestring

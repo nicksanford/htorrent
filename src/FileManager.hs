@@ -26,30 +26,40 @@ import qualified System.Posix.IO as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 import qualified System.Posix.Files.ByteString as PosixFilesBS
 import qualified Control.Exception as E
+import Control.DeepSeq (rnf)
 
 
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]
 getDefaultPieceMap tracker = (\piece -> (piece, False)) <$> getTrackerPieces tracker
 
-getFileHashes :: Tracker -> LBS.ByteString -> Maybe [BS.ByteString]
-getFileHashes tracker fileContents = do
-  let singleFileInfo@(Tracker.SingleFileInfo _ (Tracker.Length fileLength) _) = getTrackerSingleFileInfo tracker
-  if (fromIntegral $ LBS.length fileContents) /= fileLength then
-    Nothing
-  else
-    Just $ L.unfoldr f fileContents
+getFileHashes :: Integer -> LBS.ByteString -> [BS.ByteString]
+getFileHashes pieceLength fileContents = L.unfoldr f fileContents
   where f x =
           if LBS.null x then
             Nothing
           else
-            Just (shaHashRaw (LBS.toStrict $ LBS.take pieceLength x), LBS.drop pieceLength x)
-        pieceLength = fromIntegral $ getTrackerPieceLength tracker
+            Just (shaHashRaw (LBS.toStrict $ LBS.take (fromIntegral pieceLength) x),
+                  LBS.drop (fromIntegral pieceLength) x)
+testFileHashes = do
+  f <- LBS.readFile "pwned-passwords-ordered-by-count.7z"
+  Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
+  let hs = getFileHashes (fromIntegral $ getTrackerPieceLength t) f
+  E.evaluate $ rnf hs
+  return hs
 
-getCurrentPieceMap :: Tracker -> LBS.ByteString -> Maybe [(BS.ByteString, Bool)]
+testSetupFilesAndCreatePieceMap = do
+  Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
+  setupFilesAndCreatePieceMap t
+
+getCurrentPieceMap :: Tracker -> LBS.ByteString -> [(BS.ByteString, Bool)]
 getCurrentPieceMap tracker fileContent = do
-  let pm = getDefaultPieceMap tracker
-  let fh = getFileHashes tracker fileContent
-  (\bs -> zipWith (\b  (k,v) -> if b == k then (k, True) else (k, False)) bs pm) <$> fh
+  let defaultPieceMap = fst <$> getDefaultPieceMap tracker
+  let fileHashes = getFileHashes (fromIntegral $ getTrackerPieceLength tracker) fileContent
+  zipWith setMatches defaultPieceMap fileHashes
+  where setMatches pieceMapHash fileHash =
+          if pieceMapHash == fileHash
+          then (pieceMapHash, True)
+          else (pieceMapHash, False)
 
 getRequestList :: Tracker -> [BlockRequest]
 getRequestList tracker = do
@@ -163,29 +173,32 @@ secToNanoSec = (*) 1000000000
 nanoSectoSec :: Integer -> Integer
 nanoSectoSec = (flip div) 1000000000
 
-setupFilesAndCreatePieceMap :: Tracker -> Chan.Chan String -> IO [(BS.ByteString, Bool)]
-setupFilesAndCreatePieceMap tracker killChan =  do
+getFileContentsAndCreateIfNeeded :: Tracker -> IO LBS.ByteString
+getFileContentsAndCreateIfNeeded tracker = do
   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo tracker
   let fileName = UTF8.toString bsFileName
   fileExists <- Dir.doesFileExist fileName
-  unless fileExists $ do
-    createFile singleFileInfo
 
-  fileContents <- LBS.readFile fileName
-  let maybePieceMap = getCurrentPieceMap tracker fileContents
+  if fileExists then do
 
-  when (isNothing maybePieceMap) $ do
-    createFile singleFileInfo
+    fileSize <- SIO.withBinaryFile fileName SIO.ReadMode SIO.hFileSize
+    if fileSize /= getSingleFileLength singleFileInfo then
+      createFile singleFileInfo >>
+      LBS.readFile fileName
+    else
+      LBS.readFile fileName
 
-  fileContents2 <- LBS.readFile fileName
-  let maybePieceMap2 = getCurrentPieceMap tracker fileContents2
+  else
+    createFile singleFileInfo >>
+    LBS.readFile fileName
 
-  when (isNothing maybePieceMap2) $ do
-    -- print "tracker is corrupt"
-    Chan.writeChan killChan "tracker is corrupt"
+setupFilesAndCreatePieceMap :: Tracker -> IO [(BS.ByteString, Bool)]
+setupFilesAndCreatePieceMap tracker =  do
+  fileContents <- getFileContentsAndCreateIfNeeded tracker
 
-
-  return $ fromJust maybePieceMap2
+  let pieceMap = getCurrentPieceMap tracker fileContents
+  E.evaluate $ rnf pieceMap
+  return pieceMap
 
 downloadedSoFar :: Tracker.Tracker -> [(BS.ByteString, Bool)] -> Integer
 downloadedSoFar tracker pieceMap = do
@@ -224,8 +237,8 @@ start tracker port killChan = do
   -- TODO: THOUGHT: Maybe they can just make a request to the tracker on a 1:1 basis for what the current bitfield should be (given that a biefield should only be sent when a peer connects) - maybe a biefield is only for the 'server' to send???
   -- TODO: I think that the simplest, crappyest way to do this is to just keep the file if it exists, and filter out the work messages which are already done. Bitfield generation can happen later. As can detecting errors in the file.
   -- TODO: I need some way to track bandwidth to prefer highr bandwdth peers
-  pieceMap <- setupFilesAndCreatePieceMap tracker killChan
-  let piecesLeft = filter (not . snd) pieceMap
+  pieceMap <- setupFilesAndCreatePieceMap tracker
+  -- Needed in order to force Normal Form for pieceMap
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
@@ -361,3 +374,6 @@ test = do
 --   let filteredPieceList = maybe pieceList (\pm -> fst <$> filter (not . snd . snd) (zip pieceList pm)) pieceMap
 --   print filteredPieceList
 --   return filteredPieceList
+
+
+

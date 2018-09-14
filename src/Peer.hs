@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports #-}
 module Peer where
@@ -41,6 +42,8 @@ import qualified Control.Exception as E
 import qualified System.Posix.IO as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 import qualified System.Posix.Files.ByteString as PosixFilesBS
+import Control.DeepSeq 
+import GHC.Generics (Generic, Generic1)
 
 newtype Conn e = Conn e deriving (Eq, Show)
 newtype InfoHash e = InfoHash e deriving (Eq, Show)
@@ -52,7 +55,7 @@ showPeerId = UTF8.toString . B16.encode
 data PeerResponse = PeerResponse (InfoHash BS.ByteString) (PeerId BS.ByteString) deriving (Eq, Show)
 
 -- TODO: I found from trying to download arch that I was getting dupes of piece shas (not sure if I am doing something wrong, but this is to ensure I don't drop pieces b/c the shas are the same)
-newtype PieceMap = PieceMap [(BS.ByteString, Bool)] deriving Eq
+newtype PieceMap = PieceMap [(BS.ByteString, Bool)] deriving (Eq, Generic, NFData)
 newtype Chans a = Chans a deriving (Eq)
 newtype RPCParse a = RPCParse a deriving (Eq, Show)
 newtype OutStandingWork a = OutStandingWork a deriving (Eq, Show)
@@ -137,10 +140,10 @@ data PeerRPC = PeerKeepAlive
              | Cancel Integer Integer Integer
              | Request Integer Integer Integer
              | Response Integer Integer BS.ByteString
-             deriving (Eq, Show)
+             deriving (Eq, Show, Generic, NFData)
 data Piece = Piece Integer Integer BS.ByteString deriving (Eq, Show)
 
-data PeerRPCParse = PeerRPCParse (Seq.Seq W.Word8) (Maybe BS.ByteString) [PeerRPC] deriving (Eq)
+data PeerRPCParse = PeerRPCParse (Seq.Seq W.Word8) (Maybe BS.ByteString) [PeerRPC] deriving (Eq, Generic, NFData)
 
 instance Show PeerRPCParse where
   show (PeerRPCParse word8s m rpcs) = "PeerRPCParse : " <> (show $ Seq.length word8s) <> " " <> show m <> " " <> show rpcs
@@ -392,6 +395,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
   msg <- recv conn 16384
 
   let newPeerRPCParse@(PeerRPCParse _ maybeErrors _) = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState
+  E.evaluate $ rnf newPeerRPCParse
   myLog fsmState $ " newPeerRPCParse: " <> (show newPeerRPCParse)
 
   if (isJust maybeErrors) then do

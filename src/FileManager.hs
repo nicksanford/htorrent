@@ -1,5 +1,7 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports #-}
+
 module FileManager where
 import Tracker
 import Shared
@@ -27,34 +29,23 @@ import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 import qualified System.Posix.Files.ByteString as PosixFilesBS
 import qualified Control.Exception as E
 import Control.DeepSeq (rnf)
+import qualified Data.List.NonEmpty as NonEmptyL
 
 
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]
-getDefaultPieceMap tracker = (\piece -> (piece, False)) <$> getTrackerPieces tracker
+getDefaultPieceMap tracker = (, False) <$> tPieceHashes tracker
 
 getFileHashes :: Integer -> LBS.ByteString -> [BS.ByteString]
 getFileHashes pieceLength fileContents = L.unfoldr f fileContents
-  where f x =
-          if LBS.null x then
-            Nothing
-          else
-            Just (shaHashRaw (LBS.toStrict $ LBS.take (fromIntegral pieceLength) x),
-                  LBS.drop (fromIntegral pieceLength) x)
-testFileHashes = do
-  f <- LBS.readFile "pwned-passwords-ordered-by-count.7z"
-  Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
-  let hs = getFileHashes (fromIntegral $ getTrackerPieceLength t) f
-  E.evaluate $ rnf hs
-  return hs
-
-testSetupFilesAndCreatePieceMap = do
-  Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
-  setupFilesAndCreatePieceMap t
+  where f byte
+          | LBS.null byte = Nothing
+          | otherwise = Just (shaHashRaw $ LBS.toStrict $ LBS.take (fromIntegral pieceLength) byte,
+                              LBS.drop (fromIntegral pieceLength) byte)
 
 getCurrentPieceMap :: Tracker -> LBS.ByteString -> [(BS.ByteString, Bool)]
 getCurrentPieceMap tracker fileContent = do
   let defaultPieceMap = fst <$> getDefaultPieceMap tracker
-  let fileHashes = getFileHashes (fromIntegral $ getTrackerPieceLength tracker) fileContent
+  let fileHashes = getFileHashes (fromIntegral $ tPieceLength tracker) fileContent
   zipWith setMatches defaultPieceMap fileHashes
   where setMatches pieceMapHash fileHash =
           if pieceMapHash == fileHash
@@ -64,73 +55,75 @@ getCurrentPieceMap tracker fileContent = do
 getRequestList :: Tracker -> [BlockRequest]
 getRequestList tracker = do
   let pieces :: [BS.ByteString ]
-      pieces = getTrackerPieces tracker
-  let pieceLength = getTrackerPieceLength tracker
-  let xs = [(b,min blockSize (pieceLength - b)) | b <- takeWhile (<pieceLength) $ iterate (+blockSize) 0]
-  let ys = [BlockRequest (PieceIndex p) (Begin b) (RequestLength s)
+      pieces = tPieceHashes tracker
+      pieceLength = tPieceLength tracker
+      xs = [(b,min blockSize (pieceLength - b)) | b <- takeWhile (<pieceLength) $ iterate (+blockSize) 0]
+      ys = [BlockRequest { bIndex = p, bBegin = b, bLength = s, bInitiator = SelfInitiated , bSentCount = 0 , bPayload = Nothing }
            | p <- [0..fromIntegral $ (length pieces) - 2], (b, s) <- xs]
-  let SingleFileInfo (Name _) (Length totalLength) (MD5Sum _) = getTrackerSingleFileInfo tracker
-  let remainingLength = totalLength - pieceLength * (fromIntegral $ length pieces - 1)
-  let lastPieceIndex = fromIntegral (length pieces) - 1
-  let xxs = [BlockRequest (PieceIndex lastPieceIndex) (Begin b) (RequestLength $ min blockSize (remainingLength - b))
+      totalLength = sfLength $ tSingleFileInfo tracker
+      remainingLength = totalLength - pieceLength * (fromIntegral $ length pieces - 1)
+      lastPieceIndex = fromIntegral (length pieces) - 1
+      xxs = [BlockRequest { bIndex = lastPieceIndex, bBegin = b, bLength = (min blockSize (remainingLength - b)), bInitiator = SelfInitiated , bSentCount = 0 , bPayload = Nothing }
             | b <- takeWhile (<remainingLength) $ iterate (+blockSize) 0]
   ys ++ xxs
 
-getPieceList :: Tracker.Tracker -> [WorkMessage]
-getPieceList tracker = (\(w@((BlockRequest (PieceIndex i) _ _ ):_)) -> Work (PieceIndex i) w) <$> (L.groupBy (\(BlockRequest (PieceIndex x) _ _ ) (BlockRequest (PieceIndex y) _ _ ) -> x == y) $ getRequestList tracker)
-
-responseToMaybeRequest :: ResponseMessage -> Maybe WorkMessage
-responseToMaybeRequest (Failed xs) = Just xs
-responseToMaybeRequest _ = Nothing
-
+getPieceList :: Tracker -> [PieceRequest]
+getPieceList tracker = (\(w@(br:_)) -> PieceRequest (bIndex br) (NonEmptyL.fromList w)) <$> (L.groupBy (\brx bry -> (bIndex brx) == (bIndex bry)) $ getRequestList tracker)
 
 loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWorkToBeDone = do
   -- print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers) ++ " peers " ++ (show peers)
   response <- Chan.readChan responseChan
   --print $ "RESPONSE CHANNEL got data"
-  let Tracker.SingleFileInfo (Tracker.Name bsFileName) (Tracker.Length fileLength) _ = getTrackerSingleFileInfo tracker
+  let sfi = tSingleFileInfo tracker
+      bsFileName = sfName sfi
+      fileLength = sfLength sfi
   let fileName = UTF8.toString bsFileName
 
   (newPeers, newPieceMap, newCheckouts) <- case response of
-    (Succeeded (PieceResponse (PieceIndex i) (PieceContent c))) -> do
+    (Succeeded (pr@PieceResponse{})) -> do
       -- let hash = UTF8.toString $ shaHash c
       -- let hashFilePath = (fileName ++ "dir/" ++ hash)
       -- BS.writeFile hashFilePath c
       --print $ "RESPONSE CHANNEL WROTE " ++ hashFilePath
-      writePiece tracker fileName (PieceResponse (PieceIndex i) (PieceContent c))
+      writePiece tracker fileName pr
+      -- print $ "wrote piece" <> (show i)
       --print $ "RESPONSE CHANNEL: removing piece " ++ (show i) ++ " from checkouts"
-      let newCo = M.delete i checkouts
+      let index = presIndex pr
+      let newCo = M.delete index checkouts
       --print $ "RESPONSE CHANNEL: new checkouts " ++ (show newCo)
-      let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == i then (k,True) else (k,v)) <$> zip [0..] pieceMap
+      let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
       return (peers, newPM, newCo)
     (Error p) -> do
       let n = filter (/=p) peers
       --print $ "RESPONSE CHANNEL: Peer " ++ show p ++ " is no longer running. new peer list: " ++ show n
       return (n, pieceMap, checkouts)
-    co@(CheckOut (PeerThreadId peerThreadId) (PieceIndex i) timestmap) ->
-      if M.member i checkouts then do
+    co@(CheckOut peerThreadId pieceIndex timestamp) ->
+      (print $ "RESPONSE CHANNEL: hit got checkout " ++ (show co)) >>
+      if M.member pieceIndex checkouts then do
         --print $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         Chan.writeChan killChan $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         return (peers, pieceMap, checkouts)
       else do
-        let new = M.insert i (peerThreadId, timestmap) checkouts
+        let new = M.insert pieceIndex (peerThreadId, timestamp) checkouts
         -- print $ "RESPONSE CHANNEL: adding checkout " ++ (show co)
         -- print $ "RESPONSE CHANNEL: new checkouts " ++ (show new)
         return (peers, pieceMap, new)
-    hb@(HeartBeat _ (PieceIndex i)) -> do
-      let look = M.lookup i checkouts
+    hb@(HeartBeat peerThreadId pieceIndex) -> do
+      let look = M.lookup pieceIndex checkouts
 
+      print $ "Got heartbeat " <> (show $  hb)
       if isNothing look then do
         -- print $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         Chan.writeChan killChan $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         return (peers, pieceMap, checkouts)
       else do
         time <- Clock.getTime Clock.Monotonic
-        let newCo = M.adjust (\(peerThreadId, _) -> (peerThreadId, time)) i checkouts
+        let newCo = M.adjust (\(peerThreadId, _) -> (peerThreadId, time)) pieceIndex checkouts
         -- print $ "RESPONSE CHANNEL: Got heartbeat: " ++ (show hb) ++ " updated checkouts: " ++ (show newCo)
         return (peers, pieceMap, newCo)
     (Failed f) -> do
-      -- print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
+      print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
+      Chan.writeChan workChan f
       return (peers, pieceMap, checkouts)
     CheckWork -> do
         time <- Clock.getTime Clock.Monotonic
@@ -145,19 +138,13 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
         -- print $ "RESPONSE CHANNEL: Dead indexes & peers " ++ (show newWork)
         let newWorkIndxs :: [Integer]
             (newWorkIndxs, _) = unzip newWork
-        let regeneratedWork = filter (\(Work (PieceIndex i) _) -> i `elem` newWorkIndxs) filteredWorkToBeDone
+        let regeneratedWork = filter (\pr -> (preqIndex pr) `elem` newWorkIndxs) filteredWorkToBeDone
         Chan.writeList2Chan workChan regeneratedWork
         -- print $ "RESPONSE CHANNEL: Regenerated work " ++ (show regeneratedWork)
         _ <- forkIO $ checkoutTimer responseChan
         return (peers, pieceMap, newCo)
     CheckPeers ->
         return (peers, pieceMap, checkouts)
-
-  case responseToMaybeRequest response of
-    (Just work) ->
-      Chan.writeChan workChan work
-    _ ->
-      return ()
 
   print $ "Downloaded " ++ (show $ floor ((((fromIntegral $ length (filter (snd) newPieceMap)) / (fromIntegral $ length newPieceMap))) * 100)) ++ "%"
   when (allPiecesWritten newPieceMap) $ do
@@ -167,22 +154,18 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
   loop tracker workChan responseChan newPeers killChan newPieceMap newCheckouts filteredWorkToBeDone
   where allPiecesWritten = all snd
 
-secToNanoSec :: Integer -> Integer
-secToNanoSec = (*) 1000000000
-
-nanoSectoSec :: Integer -> Integer
-nanoSectoSec = (flip div) 1000000000
 
 getFileContentsAndCreateIfNeeded :: Tracker -> IO LBS.ByteString
 getFileContentsAndCreateIfNeeded tracker = do
-  let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo tracker
+  let singleFileInfo = tSingleFileInfo tracker
+  let bsFileName = sfName $ tSingleFileInfo tracker
   let fileName = UTF8.toString bsFileName
   fileExists <- Dir.doesFileExist fileName
 
   if fileExists then do
 
     fileSize <- SIO.withBinaryFile fileName SIO.ReadMode SIO.hFileSize
-    if fileSize /= getSingleFileLength singleFileInfo then
+    if fileSize /= sfLength singleFileInfo then
       createFile singleFileInfo >>
       LBS.readFile fileName
     else
@@ -200,16 +183,16 @@ setupFilesAndCreatePieceMap tracker =  do
   E.evaluate $ rnf pieceMap
   return pieceMap
 
-downloadedSoFar :: Tracker.Tracker -> [(BS.ByteString, Bool)] -> Integer
+downloadedSoFar :: Tracker -> [(BS.ByteString, Bool)] -> Integer
 downloadedSoFar tracker pieceMap = do
-  let singleFileInfo = getTrackerSingleFileInfo tracker
+  let singleFileInfo = tSingleFileInfo tracker
 
   if and $ fmap snd pieceMap then
-    getSingleFileLength singleFileInfo
+    sfLength singleFileInfo
   else
-    (fromIntegral $ length $ filter snd pieceMap) * getTrackerPieceLength tracker
+    (fromIntegral $ length $ filter snd pieceMap) * tPieceLength tracker
 
-forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> Peer  -> IO ThreadId
+forkPeer :: Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> Peer  -> IO ThreadId
 forkPeer tracker workChan responseChan broadcastChan pieceMap peer =
   forkFinally (Peer.start tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler peer responseChan)
 
@@ -221,159 +204,62 @@ errorHandler peer chan (Right x) = do
   Chan.writeChan chan $ Error peer
   putStrLn $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
-getPeers :: TrackerResponse -> [Peer]
-getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
-
-secondsBetweenTrackerCalls :: TrackerResponse -> Int
-secondsBetweenTrackerCalls (TrackerResponse _ _ _ (Interval interval) _ _ _) = fromIntegral interval
-
-start :: Tracker.Tracker -> String -> Chan.Chan String -> IO ()
+start :: Tracker -> String -> Chan.Chan String -> IO ()
 start tracker port killChan = do
-
-  --putStrLn $ "ADDING WORK TO CHANNEL: " ++ (show workToBeDone)
-  -- TODO: generate the current file state
-  -- TODO: if file state is invlaid (bytes are written to the piece but it doesn't match the hash) then log it and create a new file.
-  -- TODO: I think all peers need to know the current file sate so that they can send bitfield / have messages
-  -- TODO: THOUGHT: Maybe they can just make a request to the tracker on a 1:1 basis for what the current bitfield should be (given that a biefield should only be sent when a peer connects) - maybe a biefield is only for the 'server' to send???
-  -- TODO: I think that the simplest, crappyest way to do this is to just keep the file if it exists, and filter out the work messages which are already done. Bitfield generation can happen later. As can detecting errors in the file.
-  -- TODO: I need some way to track bandwidth to prefer highr bandwdth peers
   pieceMap <- setupFilesAndCreatePieceMap tracker
-  -- Needed in order to force Normal Form for pieceMap
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
   broadcastChan <- Chan.newChan
-  -- start server here
-  _ <- forkIO $ Server.start port tracker workChan responseChan broadcastChan (Peer.PieceMap pieceMap)
+  _ <- forkIO $ Server.start port tracker workChan responseChan broadcastChan pieceMap
 
   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
-  -- print ("maybeTrackerResponse: " ++ show maybeTrackerResponse)
   when (isNothing maybeTrackerResponse) $ do
-    -- print "ERROR: got empty tracker response"
     Chan.writeChan killChan "ERROR: got empty tracker response"
 
   let trackerResponse = fromJust maybeTrackerResponse
-  let peers = getPeers trackerResponse
+  let peers = trPeers trackerResponse
 
   putStrLn "spawning child threads for peers"
-  mapM_ (forkPeer tracker workChan responseChan broadcastChan (Peer.PieceMap pieceMap)) peers
-  --_ <- forkIO $ timer tracker port  (secondsBetweenTrackerCalls trackerResponse)
+  mapM_ (forkPeer tracker workChan responseChan broadcastChan pieceMap) peers
   _ <- forkIO $ checkoutTimer responseChan
-     -- number of microseconds in a second
 
-  let workToBeDone :: [WorkMessage]
+  let workToBeDone :: [PieceRequest]
       workToBeDone = getPieceList tracker
   let filteredWorkToBeDone = fst <$> filter (not . snd . snd) (zip workToBeDone pieceMap)
-  -- print $ "fileHashes: " ++ (show $ take 5 <$> getFileHashes tracker fileContents)
-  -- print $ "pieceMap " ++ (show $ take 5 <$> pieceMap)
-  -- print $ "workToBeDone " ++ (show $ fmap (\(Work xs)-> head xs) $ take 5 workToBeDone)
-  -- print $ "filteredPieceList length : " ++ (show $ length filteredPieceList)
-  -- print $ "filteredPieceList " ++ show filteredPieceList
   Chan.writeList2Chan workChan filteredWorkToBeDone
   loop tracker workChan responseChan peers killChan pieceMap M.empty filteredWorkToBeDone
-
--- TODO: [TODO] -> [Doing]
--- TODO: Have each peer thread send a message once they have checked out work
--- TODO: Peers must send heartbeats (once a second) that they are still working on the work to the parent.
--- TODO: If the parent fails to get heartbeats from peers for 5 seconds, then it assumes the peer is dead and enqueues the work again.
--- TODO: Once work is done it can no longer be checked out
--- timer tracker pieceMap port waitTime broadcastChan workChan responseChan = do
---   threadDelay (waitTime * 1000000)
---   broadCastState <- Chan.getChanContents broadcastChan 
---   let newPiecemap = mergeHavesIntoPieceMap pieceMap broadCastState
---   currentState <- Chan.getChanContents workChan 
---   if length currentState <
---   --Chan.writeList2Chan
---   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
---   let newWaitTime = maybe waitTime secondsBetweenTrackerCalls maybeTrackerResponse
---   timer tracker port newWaitTime workChan responseChan
 
 checkoutTimer :: Chan.Chan ResponseMessage -> IO ()
 checkoutTimer responseChan = do
   threadDelay 1000000
   Chan.writeChan responseChan CheckWork
 
-createFile :: Tracker.SingleFileInfo -> IO ()
-createFile (Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = SIO.withBinaryFile (UTF8.toString fileName) SIO.WriteMode $ flip SIO.hSetFileSize fileLength
+createFile :: SingleFileInfo -> IO ()
+createFile sfi =
+  SIO.withBinaryFile (UTF8.toString $ sfName sfi) SIO.WriteMode $ flip SIO.hSetFileSize $ sfLength sfi
 
--- import qualified System.Posix.IO as PosixIO
--- import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
--- import qualified System.Posix.Files.ByteString as PosixFilesBS
-writePiece :: Tracker.Tracker -> SIO.FilePath -> PieceResponse -> IO ()
-writePiece tracker filePath (PieceResponse (PieceIndex pieceIndex) (PieceContent content)) = do
+writePiece :: Tracker -> SIO.FilePath -> PieceResponse -> IO ()
+writePiece tracker filePath pieceResponse = do
+  let index = presIndex pieceResponse
+      content = piecePayload pieceResponse
   fd <- PosixIO.openFd filePath PosixIO.WriteOnly Nothing PosixIO.defaultFileFlags
-  written <- PosixIOBS.fdPwrite fd content $ fromIntegral $ getTrackerPieceLength tracker * pieceIndex
+  written <- PosixIOBS.fdPwrite fd content $ fromIntegral $ tPieceLength tracker * index
   PosixIO.closeFd fd
   when (fromIntegral written /= BS.length content) $
     E.throw $ userError "bad pwrite"
 
--- TODO: Make sure you check whether the block request is valid or not before performing it
-readBlock :: Tracker.Tracker -> SIO.FilePath -> BlockRequest -> IO (BS.ByteString)
-readBlock tracker filePath (BlockRequest (PieceIndex pieceIndex) (Begin begin) (RequestLength rl)) =
-  SIO.withBinaryFile filePath SIO.ReadMode f
-  where f h = do
-          SIO.hSeek h SIO.AbsoluteSeek ((getTrackerPieceLength tracker * pieceIndex) + begin)
-          BS.hGet h $ fromIntegral rl
+-- responseToMaybeRequest :: ResponseMessage -> Maybe PieceRequest
+-- responseToMaybeRequest (Failed xs) = Just xs
+-- responseToMaybeRequest _ = Nothing
 
+-- testFileHashes = do
+--   f <- LBS.readFile "pwned-passwords-ordered-by-count.7z"
+--   Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
+--   let hs = getFileHashes (fromIntegral $ getTrackerPieceLength t) f
+--   E.evaluate $ rnf hs
+--   return hs
 
-
-
--- TODO: Move this into an hspec
-test = do
-  Just t <- Tracker.testTracker2 "./test/example.torrent"
-
-  let pieceList = getPieceList t
-
-  let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = getTrackerSingleFileInfo t
-  let pieceLength = Tracker.getTrackerPieceLength t
-
-  print $ "singleFileInfo " ++ (show singleFileInfo)
-  print $ "pieceLength " ++ (show pieceLength)
-  createFile singleFileInfo
-  pieceFiles <- Dir.listDirectory "pieces"
-
-  -- Write to the file
-  forM_ pieceFiles $ \file -> do
-    print file
-    let unhexFileName = unhex $ UTF8.fromString file
-        pieces = Tracker.getTrackerPieces t
-        maybePieceIndex = unhexFileName `L.elemIndex` pieces
-    if isJust maybePieceIndex then do
-      let pieceIndex = fromIntegral $ fromJust maybePieceIndex
-      print "is an elem of pieces"
-      print $ "wrinting to index " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
-      content <- BS.readFile $ "pieces/" <> file
-      writePiece t (UTF8.toString fileName) (PieceResponse (PieceIndex pieceIndex) (PieceContent content))
-    else
-      print "is NOT an elem of pieces"
-
-  -- Read blocks from the file, verify that they sum up to the correct content
-  forM_ pieceFiles $ \file -> do
-    print file
-    let unhexFileName = unhex $ UTF8.fromString file
-        pieces = Tracker.getTrackerPieces t
-        maybePieceIndex = unhexFileName `L.elemIndex` pieces
-    if isJust maybePieceIndex then do
-      print "is an elem of pieces"
-      let pieceIndex = fromIntegral $ fromJust maybePieceIndex
-      let (Work pi blocks) = pieceList !! (fromIntegral $ pieceIndex)
-      print $ "reading index  " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
-      content <- BS.readFile $ "pieces/" <> file
-      byteStrings <- mapM (readBlock t (UTF8.toString fileName)) blocks
-      print $ "content matches up: " <> (show ((BS.concat byteStrings) == content))
-    else
-      print "is NOT an elem of pieces"
-
--- test2 = do
---   Just t <- Tracker.testTracker2 "arch-spec-0.3.pdf.torrent"
---   let pieceList = getPieceList t
---   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name bsFileName) _ _) = getTrackerSingleFileInfo t
---   let fileName = UTF8.toString bsFileName
---   fileContents <- BS.readFile fileName
---   let pieceMap = getCurrentPieceMap t fileContents
---   let filteredPieceList = maybe pieceList (\pm -> fst <$> filter (not . snd . snd) (zip pieceList pm)) pieceMap
---   print filteredPieceList
---   return filteredPieceList
-
-
-
+-- testSetupFilesAndCreatePieceMap = do
+--   Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
+--   setupFilesAndCreatePieceMap t

@@ -5,17 +5,21 @@ import Crypto.Random (getRandomBytes)
 import Data.List (unfoldr)
 import Data.Maybe (isJust)
 import Numeric (readHex)
-import qualified System.Random as R
 import qualified Crypto.Hash as C
 import qualified Data.ByteArray as BA
 import qualified Data.ByteArray.Encoding as BAE
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Base16 as B16
 import qualified Data.ByteString.UTF8 as UTF8
+import qualified Data.Word8 as W
+import qualified System.Random as R
+import qualified Data.Binary as Binary
 
 allowed :: BS.ByteString
 allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXZYZ0123456789.-_~"
 
+alphaNums :: R.StdGen -> [W.Word8]
 alphaNums g = unfoldr f (randomIndexFromSeed g)
   where f (i, newG) = Just (BS.index alphaNumsList i, randomIndexFromSeed newG)
         randomIndexFromSeed = R.randomR (0, BS.length alphaNumsList - 1)
@@ -29,6 +33,7 @@ escape x = case fmap (\(a,b) -> (BS.singleton a, b)) (BS.uncons x) of
   _ -> do
     let nextByte = BS.take 2 x
     let charOfByte = fst . B16.decode $ nextByte
+    -- TODO this is depricated, remove findSubstring
     if isJust $ BS.findSubstring charOfByte allowed
       then BS.concat [charOfByte, escape $ BS.drop 2 x]
       else BS.concat ["%", nextByte, escape $ BS.drop 2 x]
@@ -51,35 +56,34 @@ unescape :: BS.ByteString -> BS.ByteString
 unescape x = case fmap (\(a,b) -> (BS.singleton a, b)) (BS.uncons x) of
   Nothing -> x
   (Just ("%", rest)) -> BS.concat [BS.take 2 rest, unescape $ BS.drop 2 rest]
-  -- figure out how to do the ord stuff
   (Just (_, rest)) -> BS.concat [BS.take 2 rest, unescape $ BS.drop 2 rest]
 
 unhex :: BS.ByteString -> BS.ByteString
 unhex x =
-  BS.pack $ (fmap fromIntegral nums)
-  where z = zip [0..] (UTF8.toString x)
+  BS.pack $ fmap fromIntegral nums
+  where z = zip [(0::Integer)..] (UTF8.toString x)
         evens :: String
-        evens = [snd tuple | tuple <- z, even $ fst tuple]
+        evens = [b | (a,b) <- z, even a]
         odds :: String
-        odds = [snd tuple | tuple <- z, odd $ fst tuple]
+        odds = [b | (a,b) <- z, odd a]
         func a b = fst . head . readHex $ [a,b]
         nums = zipWith func evens odds
 
--- def decode(x):
---     if not x:
---         return ''
+secToNanoSec :: Integer -> Integer
+secToNanoSec = (*) 1000000000
 
---     if x[0] == '%':
---         return x[1:3] + decode(x[3:])
---     else: --         return format(ord(x[0]), '02x') + decode(x[1:])
+nanoSectoSec :: Integer -> Integer
+nanoSectoSec = flip div 1000000000
 
+showPeerId :: BS.ByteString -> String
+showPeerId = UTF8.toString . B16.encode
 
---g <- R.getStdGen 
---
+bigEndianToInteger :: [Binary.Word8] -> Maybe Binary.Word32
+bigEndianToInteger xs =
+  if length xs == 4 then
+    Just $ Binary.decode $ LBS.fromStrict $ BS.pack xs
+  else
+    Nothing
 
-
-  
-
-  
---alphaNums :: R.StdGen -> BS.ByteString
-
+integerToBigEndian :: Binary.Word32 -> [W.Word8]
+integerToBigEndian = BS.unpack . LBS.toStrict . Binary.encode

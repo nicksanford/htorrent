@@ -12,10 +12,12 @@ import qualified Data.ByteString.UTF8 as UTF8
 import qualified System.Clock as Clock
 
 import qualified Peer
-import qualified Shared
-import qualified Tracker
+import Shared
+import Tracker
+import RPCMessages (handshake, readHandShake, validateHandshake, interested, unchoke)
+import FSM
 
-start :: String -> Tracker.Tracker -> Chan.Chan Shared.WorkMessage -> Chan.Chan Shared.ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> IO ()
+start :: String -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
 start port tracker workC responseChan broadcastChan pieceMap = do
   putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show port)
   E.bracket (addrIO >>= open) close loop
@@ -46,7 +48,7 @@ start port tracker workC responseChan broadcastChan pieceMap = do
 
         talk conn peer = do
           msg <- recv conn 68
-          let maybeHandshakeResponse = Peer.readHandShake msg >>= Peer.validateHandshake tracker
+          let maybeHandshakeResponse = readHandShake msg >>= validateHandshake tracker
           putStrLn $ "Peer " <> show peer
                              <> " sent handshake "
                              <> show maybeHandshakeResponse
@@ -55,21 +57,21 @@ start port tracker workC responseChan broadcastChan pieceMap = do
                              <> " as the handshake"
 
           case maybeHandshakeResponse of
-            Just (Peer.PeerResponse _ (Peer.PeerId peerId)) -> do
-              let handshake = Peer.trackerToPeerHandshake tracker
-              sendAll conn handshake
-              let bf = Peer.pieceMapToBitField pieceMap
+            Just peerResponse -> do
+              let handshakeBS = handshake (tInfoHash tracker) (tPeerId tracker)
+              sendAll conn handshakeBS
+              let bf = pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              let fsmState = Peer.buildFSMState tracker (UTF8.fromString $ show peer) peerId conn workC responseChan time pieceMap Peer.Peer
-              Peer.myLog fsmState $ " got handshake: " <> show (BS.unpack bf)
+              let fsmState = buildFSMState tracker (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseChan time pieceMap PeerInitiated
+              myLog fsmState $ " got handshake: " <> show (BS.unpack bf)
                                                        <> " along with interested & unchoke messages "
-              Peer.myLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
+              myLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
                                                           <> " along with interested & unchoke messages "
               sendAll conn bf
-              sendAll conn Peer.interested
-              sendAll conn Peer.unchoke
-              let handleException e = Peer.myLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
-              E.catch (Peer.recvLoop fsmState) handleException
+              sendAll conn interested
+              sendAll conn unchoke
+              let handleException e = myLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
+              E.catch (recvLoop fsmState) handleException
             Nothing -> do
               putStrLn $ "Peer " <> show peer
                                  <> " got invalid handshake response "

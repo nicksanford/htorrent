@@ -6,6 +6,7 @@ import Data.Maybe (isNothing, fromJust, fromMaybe)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.Map as M
+import qualified Data.Word8 as W
 
 data BEncode = BInteger Integer
              | BString BS.ByteString
@@ -13,10 +14,12 @@ data BEncode = BInteger Integer
              | BDict (M.Map BEncode BEncode)
              deriving (Eq, Show, Ord)
 
-type UnparsedContent = BS.ByteString
+data BencodeParseType = PDict | PList | PInt | PStr deriving (Eq, Show)
 data Run a = Run UnparsedContent (Maybe a) deriving (Eq, Show)
 
+type UnparsedContent = BS.ByteString
 
+digitToI :: W.Word8 -> Maybe Int
 digitToI = digitToI' . BS.singleton
 
 digitToI' :: BS.ByteString -> Maybe Int
@@ -35,13 +38,12 @@ digitToI' _   = Nothing
 maybeReadBencode :: String -> IO (Either BS.ByteString BEncode)
 maybeReadBencode filePath = do
   xs <- BS.readFile filePath
-  -- NOTE: Done this way b/c UTF8.toString ends up throwing an error, I think the solution for this is to change the module to just use byte strings
   return $ case decode xs of
     Run "" (Just x) -> Right x
     Run unparsed _ -> Left $ BS.concat ["ERROR: Hit a BEncode parse error, stopped parsing at", unparsed]
 
 makeDict :: BS.ByteString -> Maybe ((Run BEncode, Run BEncode), BS.ByteString)
-makeDict xs = (BS.uncons xs) >>= (\(x, rest) -> if isEnd x then Nothing else makeDict' xs)
+makeDict xs = BS.uncons xs >>= (\(x, _rest) -> if isEnd x then Nothing else makeDict' xs)
 
 makeDict' :: BS.ByteString -> Maybe ((Run BEncode, Run BEncode), BS.ByteString)
 makeDict' string = if isNothing maybeBencode2
@@ -66,7 +68,6 @@ encode (BDict d) = BS.concat ["d", go , "e"]
         encodeedTuples :: (BEncode, BEncode) -> BS.ByteString
         encodeedTuples xs = BS.concat [(encode . fst $ xs), (encode . snd $ xs)]
 
-data BencodeParseType = PDict | PList | PInt | PStr deriving (Eq, Show)
 decode :: BS.ByteString ->  Run BEncode
 decode xs =
   fromMaybe (Run xs Nothing) $ BS.uncons xs >>= handleUncons
@@ -90,7 +91,7 @@ decodeType PDict xs =
         maybeList = fmap (\(Run _ bencode1, Run _ bencode2) -> (bencode1, bencode2)) unfold
         maybeRest =  (maybeHead (reverse unfold)) >>= restToMaybe
         restToMaybe :: (Run BEncode, Run BEncode) -> Maybe BS.ByteString
-        restToMaybe (_, (Run (rs) _)) = (BS.uncons rs) >>= (\(r, rest) -> if isEnd r then Just rest else Nothing)
+        restToMaybe (_, (Run rs _)) = (BS.uncons rs) >>= (\(r, rest) -> if isEnd r then Just rest else Nothing)
 
 decodeType PList xs =
   case (unfold, isNothing maybeRest) of
@@ -109,22 +110,24 @@ decodeType PInt xs = parseInt xs
 decodeType PStr xs = parseString xs
 
 parseInt :: BS.ByteString -> Run BEncode
-parseInt (xs) = fromMaybe (Run xs Nothing) (BS.uncons xs >>= handleUncons)
+parseInt xs = fromMaybe (Run xs Nothing) (BS.uncons xs >>= handleUncons)
   where
         handleUncons (first, rest) = if BS.singleton first == "-"
                                             then return $ handleNegative rest
                                             else return $ handlePositive xs
         handleNegative :: BS.ByteString -> Run BEncode
-        handleNegative xs =  case handlePositive xs of
+        handleNegative ys =  case handlePositive ys of
           Run rest (Just (BInteger x)) -> Run rest (Just (BInteger (negate x)))
           returnValue -> returnValue
         handlePositive :: BS.ByteString -> Run BEncode
-        handlePositive xs = Run rest maybeBInteger
-          where maybeBInteger = fmap (BInteger . fromIntegral) $ charsToMaybeInt $ BS.takeWhile isNotEnd xs
-                rest = BS.tail $ BS.dropWhile isNotEnd xs
+        handlePositive zs = Run rest maybeBInteger
+          where maybeBInteger = (BInteger . fromIntegral) <$> (charsToMaybeInt $ BS.takeWhile isNotEnd zs)
+                rest = BS.tail $ BS.dropWhile isNotEnd zs
 
+isNotEnd :: W.Word8 -> Bool
 isNotEnd = not . isEnd
 
+isEnd :: W.Word8 -> Bool
 isEnd = (== "e") . BS.singleton
 
 parseString :: BS.ByteString -> Run BEncode

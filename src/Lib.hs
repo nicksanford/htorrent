@@ -3,7 +3,7 @@ module Lib where
 import qualified BEncode
 import qualified FileManager
 import qualified Shared
-import Tracker (trackerRequest, toTracker, TrackerResponse (..), Peers (..))
+import Tracker (trackerRequest, toTracker)
 import Utils (getPeerID)
 
 import Control.Concurrent (forkFinally, forkIO)

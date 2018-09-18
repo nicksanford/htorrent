@@ -3,7 +3,9 @@ import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Checkers
 import Test.QuickCheck.Classes
-import Data.Maybe (fromJust, isJust)
+import Data.Maybe (isJust, fromJust, isNothing)
+import qualified System.Directory as Dir
+import qualified System.IO as SIO
 
 import BEncode
 import qualified Tracker as Tracker
@@ -12,11 +14,14 @@ import qualified Shared as Shared
 import qualified Peer as Peer
 import qualified Data.Map as M
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.Set as S
 import qualified Data.List as L
 import qualified Data.Word8 as W
 import qualified Data.Sequence             as Seq
+import Control.Monad (forM_)
+import Utils (unhex, shaHashRaw, shaHash)
 
 sizedBencode :: Int -> Gen BEncode
 sizedBencode c
@@ -51,6 +56,60 @@ newtype FourByteBigEndian = FourByteBigEndian [W.Word8] deriving (Eq, Show)
 
 bigEndianToInteger_prop :: FourByteBigEndian -> Bool 
 bigEndianToInteger_prop (FourByteBigEndian word8s) = word8s == Peer.integerToBigEndian (fromJust $ Peer.bigEndianToInteger word8s)
+
+readBlock :: Tracker.Tracker -> SIO.FilePath -> Shared.BlockRequest -> IO (BS.ByteString)
+readBlock tracker filePath (Shared.BlockRequest (Shared.PieceIndex pieceIndex) (Shared.Begin begin) (Shared.RequestLength rl)) =
+  SIO.withBinaryFile filePath SIO.ReadMode f
+  where f h = do
+          SIO.hSeek h SIO.AbsoluteSeek ((Tracker.getTrackerPieceLength tracker * pieceIndex) + begin)
+          BS.hGet h $ fromIntegral rl
+
+
+
+
+-- test = do
+--   Just t <- Tracker.testTracker2 "./test/example.torrent"
+
+--   let pieceList = FM.getPieceList t
+
+--   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = Tracker.getTrackerSingleFileInfo t
+--   let pieceLength = Tracker.getTrackerPieceLength t
+
+--   print $ "singleFileInfo " ++ (show singleFileInfo)
+--   print $ "pieceLength " ++ (show pieceLength)
+--   FM.createFile singleFileInfo
+--   pieceFiles <- Dir.listDirectory "pieces"
+
+--   -- Write to the file
+--   forM_ pieceFiles $ \file -> do
+--     print file
+--     let unhexFileName = unhex $ UTF8.fromString file
+--         pieces = Tracker.getTrackerPieces t
+--         maybePieceIndex = unhexFileName `L.elemIndex` pieces
+--     if isJust maybePieceIndex then do
+--       let pieceIndex = fromIntegral $ fromJust maybePieceIndex
+--       print "is an elem of pieces"
+--       print $ "wrinting to index " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
+--       content <- BS.readFile $ "pieces/" <> file
+--       FM.writePiece t (UTF8.toString fileName) (Shared.PieceResponse (Shared.PieceIndex pieceIndex) (Shared.PieceContent content))
+--     else
+--       print "is NOT an elem of pieces"
+
+--   forM_ pieceFiles $ \file -> do
+--     print file
+--     let unhexFileName = unhex $ UTF8.fromString file
+--         pieces = Tracker.getTrackerPieces t
+--         maybePieceIndex = unhexFileName `L.elemIndex` pieces
+--     if isJust maybePieceIndex then do
+--       print "is an elem of pieces"
+--       let pieceIndex = fromIntegral $ fromJust maybePieceIndex
+--       let (Shared.Work pi blocks) = pieceList !! (fromIntegral $ pieceIndex)
+--       print $ "reading index  " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
+--       content <- BS.readFile $ "pieces/" <> file
+--       byteStrings <- mapM (readBlock t (UTF8.toString fileName)) blocks
+--       print $ "content matches up: " <> (show ((BS.concat byteStrings) == content))
+--     else
+--       print "is NOT an elem of pieces"
   
 
 main :: IO ()
@@ -62,20 +121,20 @@ main = hspec $ do
       let pieceList = FM.getPieceList t
       let (Tracker.SingleFileInfo (Tracker.Name bsFileName) (Tracker.Length l) _) = Tracker.getTrackerSingleFileInfo t
       let fileName = UTF8.toString bsFileName
-      fileContents <- BS.readFile fileName
-      let pieceMap = fromJust $ FM.getCurrentPieceMap t fileContents
+      fileContents <- LBS.readFile fileName
+      let pieceMap = FM.getCurrentPieceMap t fileContents
       (length pieceMap) `shouldBe` 54
       (filter (not . snd) pieceMap) `shouldBe` []
       length pieceList `shouldBe` 54
       let blockRequests = L.concat $ (\(Shared.Work _ xs) -> xs) <$> pieceList
       let requestLengthSum = sum $ (\(Shared.BlockRequest _ _ (Shared.RequestLength rl)) -> rl) <$> blockRequests
-      requestLengthSum `shouldBe` fromIntegral (BS.length fileContents)
+      requestLengthSum `shouldBe` fromIntegral (LBS.length fileContents)
       let pieceLength = Tracker.getTrackerPieceLength t
       let requests = (\(Shared.BlockRequest (Shared.PieceIndex pieceIndex)
                                             (Shared.Begin b)
                                             (Shared.RequestLength rl)) -> Peer.Request pieceIndex b rl) <$> blockRequests
       pieces <- (Peer.peerRPCsToPieces pieceLength (bsFileName, l) requests)
-      (BS.concat $ (\(Peer.Piece _ _ c) -> c) <$> pieces) `shouldBe` fileContents
+      (BS.concat $ (\(Peer.Piece _ _ c) -> c) <$> pieces) `shouldBe` (LBS.toStrict fileContents)
       let piecesBS = BS.concat $ Peer.pieceToBS <$> pieces
       let emptySeq = Seq.empty
       let (Peer.PeerRPCParse buffer Nothing parsedPieces) = Peer.parseRPC (Peer.PieceMap $ fmap (\(a,b) -> (a,False)) pieceMap) piecesBS Peer.defaultPeerRPCParse

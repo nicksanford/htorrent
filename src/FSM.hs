@@ -4,7 +4,9 @@
 
 module FSM ( recvLoop
            , pieceMapToBitField
+           , fetchBlockResponses
            , buildFSMState
+           , blockResponseToBS
            ) where
 
 import Shared
@@ -256,8 +258,8 @@ conformsToHash pieceMap pieceRequest payloads = do
 initPieceMap :: Tracker -> PieceMap
 initPieceMap t = (, False) <$> tPieceHashes t
 
-lookupBlockResponses :: Integer -> SingleFileInfo -> [PeerRPC] -> IO [BlockResponse]
-lookupBlockResponses pieceLen singleFileInfo rpcs = do
+fetchBlockResponses :: Integer -> SingleFileInfo -> [PeerRPC] -> IO [BlockResponse]
+fetchBlockResponses pieceLen singleFileInfo rpcs = do
   let fileName = sfName singleFileInfo
   mapM (r $ UTF8.toString fileName) $ filter isRequest rpcs
   where r fileName (Request blockRequest) = do
@@ -279,7 +281,7 @@ buildPieces fsmState = do -- @(FSMState fsmID singleFileInfo pieceLength conn pe
   let oldRPCParse = rpcParse fsmState
   let tracker = getTracker fsmState
   let parsedRPCs = pRPCParsed oldRPCParse
-  newBlockResponses <- lookupBlockResponses (tPieceLength tracker) (tSingleFileInfo tracker) parsedRPCs
+  newBlockResponses <- fetchBlockResponses (tPieceLength tracker) (tSingleFileInfo tracker) parsedRPCs
   let newRPC = filter (not . isRequest) parsedRPCs
   return $ fsmState { rpcParse = oldRPCParse { pRPCParsed = newRPC}
                     , getPeer = peer { blockResponsesForPeer = newBlockResponses }

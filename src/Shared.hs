@@ -21,7 +21,7 @@ data BlockRequest = BlockRequest { bIndex             :: Integer
                                  , bInitiator         :: Initiator
                                  , bSentCount         :: Integer
                                  , bPayload           :: Maybe Payload
-                                 } deriving (Eq, Show, Generic, NFData)
+                                 } deriving (Eq, Show, Generic, NFData, Ord)
 
 data PieceRequest = PieceRequest { preqIndex :: Integer
                                  , preqBlockRequests :: NonEmptyL.NonEmpty BlockRequest
@@ -60,7 +60,7 @@ data FSMState = FSMState { fsmId             :: BS.ByteString
 
 data Initiator = SelfInitiated
                | PeerInitiated
-               deriving (Eq, Show, Generic, NFData)
+               deriving (Eq, Show, Generic, NFData, Ord)
 
 data Peer = Peer { pIP :: BS.ByteString
                  , pPort :: Integer

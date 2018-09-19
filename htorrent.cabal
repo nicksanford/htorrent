@@ -69,6 +69,7 @@ test-suite htorrent-test
   main-is:             Spec.hs
   build-depends:       base
                      , htorrent
+                     , directory
                      , test-framework
                      , test-framework-quickcheck2
                      , QuickCheck

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Checkers
@@ -9,9 +10,12 @@ import qualified System.IO as SIO
 
 import BEncode
 import qualified Tracker as Tracker
+import qualified FSM as FSM
 import qualified FileManager as FM
 import qualified Shared as Shared
 import qualified Peer as Peer
+import qualified Parser as Parser
+import qualified Utils as Utils
 import qualified Data.Map as M
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -20,6 +24,7 @@ import qualified Data.Set as S
 import qualified Data.List as L
 import qualified Data.Word8 as W
 import qualified Data.Sequence             as Seq
+import qualified Data.List.NonEmpty as NonEmptyL
 import Control.Monad (forM_)
 import Utils (unhex, shaHashRaw, shaHash)
 
@@ -55,92 +60,42 @@ encodeDecodeRoundTrip_prop bencode = bencode == ((\(Run "" (Just x)) -> x) . dec
 newtype FourByteBigEndian = FourByteBigEndian [W.Word8] deriving (Eq, Show)
 
 bigEndianToInteger_prop :: FourByteBigEndian -> Bool 
-bigEndianToInteger_prop (FourByteBigEndian word8s) = word8s == Peer.integerToBigEndian (fromJust $ Peer.bigEndianToInteger word8s)
+bigEndianToInteger_prop (FourByteBigEndian word8s) = word8s == Utils.integerToBigEndian (fromJust $ Utils.bigEndianToInteger word8s)
 
-readBlock :: Tracker.Tracker -> SIO.FilePath -> Shared.BlockRequest -> IO (BS.ByteString)
-readBlock tracker filePath (Shared.BlockRequest (Shared.PieceIndex pieceIndex) (Shared.Begin begin) (Shared.RequestLength rl)) =
+readBlock :: Shared.Tracker -> SIO.FilePath -> Shared.BlockRequest -> IO (BS.ByteString)
+readBlock tracker filePath br =
   SIO.withBinaryFile filePath SIO.ReadMode f
   where f h = do
-          SIO.hSeek h SIO.AbsoluteSeek ((Tracker.getTrackerPieceLength tracker * pieceIndex) + begin)
-          BS.hGet h $ fromIntegral rl
-
-
-
-
--- test = do
---   Just t <- Tracker.testTracker2 "./test/example.torrent"
-
---   let pieceList = FM.getPieceList t
-
---   let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = Tracker.getTrackerSingleFileInfo t
---   let pieceLength = Tracker.getTrackerPieceLength t
-
---   print $ "singleFileInfo " ++ (show singleFileInfo)
---   print $ "pieceLength " ++ (show pieceLength)
---   FM.createFile singleFileInfo
---   pieceFiles <- Dir.listDirectory "pieces"
-
---   -- Write to the file
---   forM_ pieceFiles $ \file -> do
---     print file
---     let unhexFileName = unhex $ UTF8.fromString file
---         pieces = Tracker.getTrackerPieces t
---         maybePieceIndex = unhexFileName `L.elemIndex` pieces
---     if isJust maybePieceIndex then do
---       let pieceIndex = fromIntegral $ fromJust maybePieceIndex
---       print "is an elem of pieces"
---       print $ "wrinting to index " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
---       content <- BS.readFile $ "pieces/" <> file
---       FM.writePiece t (UTF8.toString fileName) (Shared.PieceResponse (Shared.PieceIndex pieceIndex) (Shared.PieceContent content))
---     else
---       print "is NOT an elem of pieces"
-
---   forM_ pieceFiles $ \file -> do
---     print file
---     let unhexFileName = unhex $ UTF8.fromString file
---         pieces = Tracker.getTrackerPieces t
---         maybePieceIndex = unhexFileName `L.elemIndex` pieces
---     if isJust maybePieceIndex then do
---       print "is an elem of pieces"
---       let pieceIndex = fromIntegral $ fromJust maybePieceIndex
---       let (Shared.Work pi blocks) = pieceList !! (fromIntegral $ pieceIndex)
---       print $ "reading index  " ++ (show pieceIndex) ++ " offset " ++ (show $ pieceLength * pieceIndex)
---       content <- BS.readFile $ "pieces/" <> file
---       byteStrings <- mapM (readBlock t (UTF8.toString fileName)) blocks
---       print $ "content matches up: " <> (show ((BS.concat byteStrings) == content))
---     else
---       print "is NOT an elem of pieces"
-  
+          SIO.hSeek h SIO.AbsoluteSeek ((Shared.tPieceLength tracker * (Shared.bIndex br)) + (Shared.bBegin br))
+          BS.hGet h $ fromIntegral (Shared.bLength br)
 
 main :: IO ()
 main = hspec $ do
 
   describe "peerRPCsToPieces" $ do
     it "should be able to retrieve all content in a file" $ do
-      Just t <- Tracker.testTracker2 "./test/arch-spec-0.3.pdf.torrent"
+      Just t <- Tracker.load "./test/arch-spec-0.3.pdf.torrent"
+      let pieceLength = Shared.tPieceLength t
       let pieceList = FM.getPieceList t
-      let (Tracker.SingleFileInfo (Tracker.Name bsFileName) (Tracker.Length l) _) = Tracker.getTrackerSingleFileInfo t
+      let sfi = Shared.tSingleFileInfo t
+      let l = Shared.sfLength sfi
+      let bsFileName = Shared.sfName sfi
       let fileName = UTF8.toString bsFileName
       fileContents <- LBS.readFile fileName
       let pieceMap = FM.getCurrentPieceMap t fileContents
       (length pieceMap) `shouldBe` 54
       (filter (not . snd) pieceMap) `shouldBe` []
       length pieceList `shouldBe` 54
-      let blockRequests = L.concat $ (\(Shared.Work _ xs) -> xs) <$> pieceList
-      let requestLengthSum = sum $ (\(Shared.BlockRequest _ _ (Shared.RequestLength rl)) -> rl) <$> blockRequests
+      let blockRequests = L.concat $ ((NonEmptyL.toList . Shared.preqBlockRequests) <$>  pieceList)
+      let requestLengthSum = sum $ Shared.bLength <$> blockRequests
       requestLengthSum `shouldBe` fromIntegral (LBS.length fileContents)
-      let pieceLength = Tracker.getTrackerPieceLength t
-      let requests = (\(Shared.BlockRequest (Shared.PieceIndex pieceIndex)
-                                            (Shared.Begin b)
-                                            (Shared.RequestLength rl)) -> Peer.Request pieceIndex b rl) <$> blockRequests
-      pieces <- (Peer.peerRPCsToPieces pieceLength (bsFileName, l) requests)
-      (BS.concat $ (\(Peer.Piece _ _ c) -> c) <$> pieces) `shouldBe` (LBS.toStrict fileContents)
-      let piecesBS = BS.concat $ Peer.pieceToBS <$> pieces
-      let emptySeq = Seq.empty
-      let (Peer.PeerRPCParse buffer Nothing parsedPieces) = Peer.parseRPC (Peer.PieceMap $ fmap (\(a,b) -> (a,False)) pieceMap) piecesBS Peer.defaultPeerRPCParse
+      pieces <- (FSM.fetchBlockResponses pieceLength sfi (Shared.Request <$> blockRequests))
+      (BS.concat $ Shared.pBlock <$> pieces) `shouldBe` (LBS.toStrict fileContents)
+      let piecesBS = BS.concat $ FSM.blockResponseToBS <$> pieces
+      let (Shared.PeerRPCParse buffer Nothing parsedBlockResponses) = Parser.parseRPC ((,False) . fst <$> pieceMap) piecesBS Parser.defaultPeerRPCParse
       buffer `shouldBe` Seq.empty
-      length parsedPieces `shouldBe` length pieces
-      (traverse Peer.peerRPCToPiece parsedPieces) `shouldBe` Just pieces
+      length parsedBlockResponses `shouldBe` length pieces
+      ((\(Shared.Response r) -> r) <$> parsedBlockResponses) `shouldBe` pieces
 
   describe "decode" $ do
     describe "charsToMaybeInt_prop" $ do
@@ -195,54 +150,56 @@ main = hspec $ do
 
   describe "getRequestList" $ do
     it "when all lengths are summed up it should equal the length of the content" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
-      let Tracker.SingleFileInfo (Tracker.Name _) (Tracker.Length totalLength) (Tracker.MD5Sum _) = Tracker.getTrackerSingleFileInfo tracker
-      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldBe` totalLength
+      Just tracker <- Tracker.load "./test/example.torrent"
+      let sfi = Shared.tSingleFileInfo tracker
+      let totalLength= Shared.sfLength sfi
+      sum [Shared.bLength br | br <- FM.getRequestList tracker] `shouldBe` totalLength
 
-      Just (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length l) md5) mdi me) <- Tracker.testTracker2 "./test/example.torrent"
-      let newTracker = (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length (l+3)) md5) mdi me)
-      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList newTracker] `shouldBe` l+3
+      let newTracker = tracker { Shared.tSingleFileInfo = sfi { Shared.sfLength = (3 + totalLength)} }
+      sum [Shared.bLength br | br <- FM.getRequestList newTracker] `shouldBe` totalLength+3
 
-      let newnewTracker = (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length (l-3)) md5) mdi me)
-      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList newnewTracker] `shouldBe` l-3
+      let newnewTracker = tracker { Shared.tSingleFileInfo = sfi { Shared.sfLength = (totalLength - 3)} }
+      sum [Shared.bLength br | br <- FM.getRequestList newnewTracker] `shouldBe` (totalLength-3)
 
     it "there should be no duplicate elements" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
+      Just tracker <- Tracker.load "./test/example.torrent"
       (S.size $ S.fromList $ FM.getRequestList tracker) `shouldBe` (fromIntegral $ length $ FM.getRequestList tracker)
 
     it "the length should never exceed the blockSize" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
-      maximum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldBe` Shared.blockSize
+      Just tracker <- Tracker.load "./test/example.torrent"
+      maximum [Shared.bLength br | br <- FM.getRequestList tracker] `shouldBe` Shared.blockSize
 
     it "the length should never be smaller or equal to 0" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
-      minimum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldSatisfy` (> 0)
+      Just tracker <- Tracker.load "./test/example.torrent"
+      minimum [Shared.bLength br | br <- FM.getRequestList tracker] `shouldSatisfy` (> 0)
 
     it "when grouped by pieceIndex, there should be the same number of pieces and the indexes should be the same as the piece indexes" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
-      let pieces = Tracker.getTrackerPieces tracker
-      let groupedRequestList = L.groupBy (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) (Shared.BlockRequest (Shared.PieceIndex y) _ _) -> x == y) $ FM.getRequestList tracker
+      Just tracker <- Tracker.load "./test/example.torrent"
+      let pieces = Shared.tPieceHashes tracker
+      let groupedRequestList = L.groupBy (\brx bry -> Shared.bIndex brx == Shared.bIndex bry) $ FM.getRequestList tracker
       length groupedRequestList `shouldBe` length pieces
 
     it "when grouped by pieceIndex, the indexes should be the same as the piece indexes" $ do
-      Just tracker <- Tracker.testTracker2 "./test/example.torrent"
-      let pieces = Tracker.getTrackerPieces tracker
+      Just tracker <- Tracker.load "./test/example.torrent"
+      let pieces = Shared.tPieceHashes tracker
       let rl = FM.getRequestList tracker
-      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap Shared.bIndex rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)
 
     it "still works if the total length is not a power of 2 above" $ do
-      Just (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length l) md5) mdi me) <- Tracker.testTracker2 "./test/example.torrent"
-      let newTracker = (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length (l+3)) md5) mdi me)
-      let pieces = Tracker.getTrackerPieces newTracker
+      Just tracker <- Tracker.load "./test/example.torrent"
+      let sfi = Shared.tSingleFileInfo tracker
+      let newTracker = tracker { Shared.tSingleFileInfo = sfi { Shared.sfLength = (3 + Shared.sfLength sfi)} }
+      let pieces = Shared.tPieceHashes newTracker
       let rl = FM.getRequestList newTracker
-      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap Shared.bIndex rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)
 
     it "still works if the total length is not a power of 2 below" $ do
-      Just (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length l) md5) mdi me) <- Tracker.testTracker2 "./test/example.torrent"
-      let newTracker = (Tracker.Tracker p a pl ps ih (Tracker.SingleFileInfo n (Tracker.Length (l-3)) md5) mdi me)
-      let pieces = Tracker.getTrackerPieces newTracker
+      Just tracker <- Tracker.load "./test/example.torrent"
+      let sfi = Shared.tSingleFileInfo tracker
+      let newTracker = tracker { Shared.tSingleFileInfo = sfi { Shared.sfLength = (Shared.sfLength sfi - 3)} }
+      let pieces = Shared.tPieceHashes newTracker
       let rl = FM.getRequestList newTracker
-      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap Shared.bIndex rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)

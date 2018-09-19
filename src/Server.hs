@@ -19,15 +19,15 @@ import           RPCMessages               (handshake, interested,
 import           Shared
 import           Tracker
 
-start :: String -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
-start port tracker workC responseChan broadcastChan pieceMap = do
-  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show port)
+start :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
+start opt tracker workC responseChan broadcastChan pieceMap = do
+  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show $ port opt)
   E.bracket (addrIO >>= open) close loop
 
   where hints = defaultHints { addrSocketType = Stream
                              , addrFlags = [AI_PASSIVE]
                              }
-        addrIO = getAddrInfo (Just hints) Nothing (Just port) >>= return . head
+        addrIO = getAddrInfo (Just hints) Nothing (Just $ show $ port opt) >>= return . head
         open addr = do
           sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
           -- Solves issue withNetwork.Socket.bind: resource busy (Address already in use)

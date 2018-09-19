@@ -15,6 +15,11 @@ import           GHC.Generics            (Generic)
 import           Network.Socket
 import qualified System.Clock            as Clock
 
+data Opt = Opt { tracker :: String
+               , debug   :: Bool
+               , port    :: Integer
+               }
+
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.
 data BlockRequest = BlockRequest { bIndex     :: Integer
                                  , bBegin     :: Integer

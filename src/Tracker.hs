@@ -74,9 +74,9 @@ createTrackerRequestPayload t port downloaded =
                                                   , "&info_hash=", escape $ tInfoHash t
                                                   ]
 
-trackerRequest :: Tracker -> String -> Integer -> IO (Maybe TrackerResponse)
-trackerRequest tracker port downloaded =
-  HTTP.parseRequest (createTrackerRequestPayload tracker port downloaded) >>=
+trackerRequest :: Tracker -> Opt -> Integer -> IO (Maybe TrackerResponse)
+trackerRequest tracker opt downloaded =
+  HTTP.parseRequest (createTrackerRequestPayload tracker (show $ port opt) downloaded) >>=
   HTTP.httpBS >>=
   handleTrackerRequest
 

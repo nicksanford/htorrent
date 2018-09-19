@@ -41,6 +41,7 @@ library
                      , http-conduit
                      , memory
                      , network
+                     , optparse-applicative
                      , random
                      , stm
                      , text

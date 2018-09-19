@@ -212,16 +212,16 @@ errorHandler peer chan (Right x) = do
   Chan.writeChan chan $ Error peer
   putStrLn $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
-start :: Tracker -> String -> Chan.Chan String -> IO ()
-start tracker port killChan = do
+start :: Tracker -> Opt -> Chan.Chan String -> IO ()
+start tracker opt killChan = do
   pieceMap <- setupFilesAndCreatePieceMap tracker
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
   broadcastChan <- Chan.newChan
-  _ <- forkIO $ Server.start port tracker workChan responseChan broadcastChan pieceMap
+  _ <- forkIO $ Server.start opt tracker workChan responseChan broadcastChan pieceMap
 
-  maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
+  maybeTrackerResponse <- trackerRequest tracker opt (downloadedSoFar tracker pieceMap)
   when (isNothing maybeTrackerResponse) $ do
     Chan.writeChan killChan "ERROR: got empty tracker response"
 
@@ -256,18 +256,3 @@ writePiece tracker filePath pieceResponse = do
   PosixIO.closeFd fd
   when (fromIntegral written /= BS.length content) $
     E.throw $ userError "bad pwrite"
-
--- responseToMaybeRequest :: ResponseMessage -> Maybe PieceRequest
--- responseToMaybeRequest (Failed xs) = Just xs
--- responseToMaybeRequest _ = Nothing
-
--- testFileHashes = do
---   f <- LBS.readFile "pwned-passwords-ordered-by-count.7z"
---   Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
---   let hs = getFileHashes (fromIntegral $ getTrackerPieceLength t) f
---   E.evaluate $ rnf hs
---   return hs
-
--- testSetupFilesAndCreatePieceMap = do
---   Just t <- testTracker2 "53555c69e3799d876159d7290ea60e56b35e36a9.torrent"
---   setupFilesAndCreatePieceMap t

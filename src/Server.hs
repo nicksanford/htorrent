@@ -1,29 +1,33 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Server (start) where
 
-import Control.Concurrent (forkFinally)
-import Control.Concurrent.Chan as Chan
-import Control.Monad (forever, void)
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (recv, sendAll)
-import qualified Control.Exception as E
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified System.Clock as Clock
+import           Control.Concurrent        (forkFinally)
+import           Control.Concurrent.Chan   as Chan
+import qualified Control.Exception         as E
+import           Control.Monad             (forever, void, when)
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.UTF8      as UTF8
+import           Network.Socket            hiding (recv)
+import           Network.Socket.ByteString (recv, sendAll)
+import qualified System.Clock              as Clock
 
+import           FSM
 import qualified Peer
-import qualified Shared
-import qualified Tracker
+import           RPCMessages               (handshake, interested,
+                                            readHandShake, unchoke,
+                                            validateHandshake)
+import           Shared
+import           Tracker
 
-start :: String -> Tracker.Tracker -> Chan.Chan Shared.WorkMessage -> Chan.Chan Shared.ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> IO ()
-start port tracker workC responseChan broadcastChan pieceMap = do
-  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show port)
+start :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
+start opt tracker workC responseChan broadcastChan pieceMap = do
+  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show $ port opt)
   E.bracket (addrIO >>= open) close loop
 
   where hints = defaultHints { addrSocketType = Stream
                              , addrFlags = [AI_PASSIVE]
                              }
-        addrIO = getAddrInfo (Just hints) Nothing (Just port) >>= return . head
+        addrIO = getAddrInfo (Just hints) Nothing (Just $ show $ port opt) >>= return . head
         open addr = do
           sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
           -- Solves issue withNetwork.Socket.bind: resource busy (Address already in use)
@@ -35,43 +39,46 @@ start port tracker workC responseChan broadcastChan pieceMap = do
 
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          putStrLn $ "LOOP: Accepted connection " <> show conn
-                                                  <> " from "
-                                                  <> show peer
-                                                  <> "\nBlocking until handshake is received"
+          when (debug opt) $
+            putStrLn $ "LOOP: Accepted connection " <> show conn
+                                                    <> " from "
+                                                    <> show peer
+                                                    <> "\nBlocking until handshake is received"
 
-          let threadEndHandler _ = putStrLn ("closing " <> show conn <> "  from " <> show peer)
+          let threadEndHandler _ = when (debug opt) (putStrLn ("closing " <> show conn <> "  from " <> show peer))
                                    >> close conn
           void $ forkFinally (talk conn peer) threadEndHandler
 
         talk conn peer = do
           msg <- recv conn 68
-          let maybeHandshakeResponse = Peer.readHandShake msg >>= Peer.validateHandshake tracker
-          putStrLn $ "Peer " <> show peer
-                             <> " sent handshake "
-                             <> show maybeHandshakeResponse
-                             <> "\nraw: "
-                             <> UTF8.toString msg
-                             <> " as the handshake"
+          let maybeHandshakeResponse = readHandShake msg >>= validateHandshake tracker
+          when (debug opt) $
+            putStrLn $ "Peer " <> show peer
+                              <> " sent handshake "
+                              <> show maybeHandshakeResponse
+                              <> "\nraw: "
+                              <> UTF8.toString msg
+                              <> " as the handshake"
 
           case maybeHandshakeResponse of
-            Just (Peer.PeerResponse _ (Peer.PeerId peerId)) -> do
-              let handshake = Peer.trackerToPeerHandshake tracker
-              sendAll conn handshake
-              let bf = Peer.pieceMapToBitField pieceMap
+            Just peerResponse -> do
+              let handshakeBS = handshake (tInfoHash tracker) (tPeerId tracker)
+              sendAll conn handshakeBS
+              let bf = pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              let fsmState = Peer.buildFSMState tracker (UTF8.fromString $ show peer) peerId conn workC responseChan time pieceMap Peer.Peer
-              Peer.myLog fsmState $ " got handshake: " <> show (BS.unpack bf)
+              let fsmState = buildFSMState opt tracker (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseChan time pieceMap PeerInitiated
+              fsmLog fsmState $ " got handshake: " <> show (BS.unpack bf)
                                                        <> " along with interested & unchoke messages "
-              Peer.myLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
+              fsmLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
                                                           <> " along with interested & unchoke messages "
               sendAll conn bf
-              sendAll conn Peer.interested
-              sendAll conn Peer.unchoke
-              let handleException e = Peer.myLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
-              E.catch (Peer.recvLoop fsmState) handleException
+              sendAll conn interested
+              sendAll conn unchoke
+              let handleException e = fsmLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
+              E.catch (recvLoop fsmState) handleException
             Nothing -> do
-              putStrLn $ "Peer " <> show peer
-                                 <> " got invalid handshake response "
-                                 <> show maybeHandshakeResponse
+              when (debug opt) $
+                putStrLn $ "Peer " <> show peer
+                                  <> " got invalid handshake response "
+                                  <> show maybeHandshakeResponse
               return ()

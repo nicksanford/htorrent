@@ -23,6 +23,9 @@ library
                      , Peer
                      , FileManager
                      , Shared
+                     , FSM
+                     , Parser
+                     , RPCMessages
   build-depends:       base >= 4.7 && < 5
                      , attoparsec
                      , base16-bytestring
@@ -38,6 +41,7 @@ library
                      , http-conduit
                      , memory
                      , network
+                     , optparse-applicative
                      , random
                      , stm
                      , text
@@ -66,6 +70,7 @@ test-suite htorrent-test
   main-is:             Spec.hs
   build-depends:       base
                      , htorrent
+                     , directory
                      , test-framework
                      , test-framework-quickcheck2
                      , QuickCheck

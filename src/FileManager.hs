@@ -3,6 +3,7 @@
 {-# LANGUAGE TupleSections     #-}
 
 module FileManager where
+import           Prelude hiding (log)
 import           Control.Concurrent                           (ThreadId,
                                                                forkFinally,
                                                                forkIO,
@@ -76,10 +77,8 @@ getRequestList tracker = do
 getPieceList :: Tracker -> [PieceRequest]
 getPieceList tracker = (\(w@(br:_)) -> PieceRequest (bIndex br) (NonEmptyL.fromList w)) <$> (L.groupBy (\brx bry -> (bIndex brx) == (bIndex bry)) $ getRequestList tracker)
 
-loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWorkToBeDone = do
-  -- print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers) ++ " peers " ++ (show peers)
+loop opt tracker workChan responseChan peers killChan pieceMap checkouts filteredWorkToBeDone = do
   response <- Chan.readChan responseChan
-  --print $ "RESPONSE CHANNEL got data"
   let sfi = tSingleFileInfo tracker
       bsFileName = sfName sfi
       fileLength = sfLength sfi
@@ -87,55 +86,44 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
 
   (newPeers, newPieceMap, newCheckouts) <- case response of
     (Succeeded (pr@PieceResponse{})) -> do
-      -- let hash = UTF8.toString $ shaHash c
-      -- let hashFilePath = (fileName ++ "dir/" ++ hash)
-      -- BS.writeFile hashFilePath c
-      --print $ "RESPONSE CHANNEL WROTE " ++ hashFilePath
-      writePiece tracker fileName pr
-      -- print $ "wrote piece" <> (show i)
-      --print $ "RESPONSE CHANNEL: removing piece " ++ (show i) ++ " from checkouts"
+      writePiece killChan tracker fileName pr
       let index = presIndex pr
       let newCo = M.delete index checkouts
-      --print $ "RESPONSE CHANNEL: new checkouts " ++ (show newCo)
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
       return (peers, newPM, newCo)
     (Error p) -> do
       let n = filter (/=p) peers
-      --print $ "RESPONSE CHANNEL: Peer " ++ show p ++ " is no longer running. new peer list: " ++ show n
       return (n, pieceMap, checkouts)
-    co@(CheckOut peerThreadId pieceIndex timestamp) ->
-      (print $ "RESPONSE CHANNEL: hit got checkout " ++ (show co)) >>
+    co@(CheckOut peerThreadId pieceIndex timestamp) -> do
+      when (debug opt) $ 
+        (print $ "RESPONSE CHANNEL: hit got checkout " ++ (show co)) 
       if M.member pieceIndex checkouts then do
-        --print $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         Chan.writeChan killChan $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         return (peers, pieceMap, checkouts)
       else do
         let new = M.insert pieceIndex (peerThreadId, timestamp) checkouts
-        -- print $ "RESPONSE CHANNEL: adding checkout " ++ (show co)
-        -- print $ "RESPONSE CHANNEL: new checkouts " ++ (show new)
         return (peers, pieceMap, new)
     hb@(HeartBeat peerThreadId pieceIndex) -> do
       let look = M.lookup pieceIndex checkouts
 
-      print $ "Got heartbeat " <> (show $  hb)
+      when (debug opt) $ 
+        print $ "Got heartbeat " <> (show $  hb)
       if isNothing look then do
-        -- print $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         Chan.writeChan killChan $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         return (peers, pieceMap, checkouts)
       else do
         time <- Clock.getTime Clock.Monotonic
         let newCo = M.adjust (\(peerThreadId, _) -> (peerThreadId, time)) pieceIndex checkouts
-        -- print $ "RESPONSE CHANNEL: Got heartbeat: " ++ (show hb) ++ " updated checkouts: " ++ (show newCo)
         return (peers, pieceMap, newCo)
     (Failed f) -> do
-      print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
+      when (debug opt) $ 
+        print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
       let index = preqIndex f
       let newCo = M.delete index checkouts
       Chan.writeChan workChan f
       return (peers, pieceMap, newCo)
     CheckWork -> do
         time <- Clock.getTime Clock.Monotonic
--- If it has been more than 5 seconds since a heartbeat, assume the thread is dead and recreate the work.
         let f = (\k (peerThreadId, heartbeatTimeSpec) (newChenckouts, workToBeReDone) ->
                    if 5 > (Clock.sec $ Clock.diffTimeSpec time heartbeatTimeSpec) then
                      (M.delete k newChenckouts, (k, peerThreadId):workToBeReDone)
@@ -143,23 +131,20 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
                      (newChenckouts, workToBeReDone)
                 )
         let (newCo, newWork)= M.foldrWithKey f (checkouts, []) checkouts
-        -- print $ "RESPONSE CHANNEL: Dead indexes & peers " ++ (show newWork)
         let newWorkIndxs :: [Integer]
             (newWorkIndxs, _) = unzip newWork
         let regeneratedWork = filter (\pr -> (preqIndex pr) `elem` newWorkIndxs) filteredWorkToBeDone
         Chan.writeList2Chan workChan regeneratedWork
-        -- print $ "RESPONSE CHANNEL: Regenerated work " ++ (show regeneratedWork)
         _ <- forkIO $ checkoutTimer responseChan
         return (peers, pieceMap, newCo)
     CheckPeers ->
         return (peers, pieceMap, checkouts)
 
   print $ "Downloaded " ++ (show $ floor ((((fromIntegral $ length (filter (snd) newPieceMap)) / (fromIntegral $ length newPieceMap))) * 100)) ++ "%"
-  when (allPiecesWritten newPieceMap) $ do
-    print "DONE!"
-    -- Chan.writeChan killChan ()
+  when (allPiecesWritten newPieceMap && quitWhenDone opt) $
+    Chan.writeChan killChan "DONE!"
 
-  loop tracker workChan responseChan newPeers killChan newPieceMap newCheckouts filteredWorkToBeDone
+  loop opt tracker workChan responseChan newPeers killChan newPieceMap newCheckouts filteredWorkToBeDone
   where allPiecesWritten = all snd
 
 
@@ -200,21 +185,24 @@ downloadedSoFar tracker pieceMap = do
   else
     (fromIntegral $ length $ filter snd pieceMap) * tPieceLength tracker
 
-forkPeer :: Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> Peer  -> IO ThreadId
-forkPeer tracker workChan responseChan broadcastChan pieceMap peer =
-  forkFinally (Peer.start tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler peer responseChan)
+forkPeer :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> Peer  -> IO ThreadId
+forkPeer opt tracker workChan responseChan broadcastChan pieceMap peer =
+  forkFinally (Peer.start opt tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler opt peer responseChan)
 
-errorHandler :: (Show a, Show b) => Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
-errorHandler peer chan (Left x) = do
+errorHandler :: (Show a, Show b) => Opt -> Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
+errorHandler opt peer chan (Left x) = do
   Chan.writeChan chan $ Error peer
-  putStrLn $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
-errorHandler peer chan (Right x) = do
+  when (debug opt) $ 
+    putStrLn $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
+errorHandler opt peer chan (Right x) = do
   Chan.writeChan chan $ Error peer
-  putStrLn $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
+  when (debug opt) $ 
+    putStrLn $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
 start :: Tracker -> Opt -> Chan.Chan String -> IO ()
 start tracker opt killChan = do
   pieceMap <- setupFilesAndCreatePieceMap tracker
+  let l = log opt
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
@@ -228,15 +216,15 @@ start tracker opt killChan = do
   let trackerResponse = fromJust maybeTrackerResponse
   let peers = trPeers trackerResponse
 
-  putStrLn "spawning child threads for peers"
-  mapM_ (forkPeer tracker workChan responseChan broadcastChan pieceMap) peers
+  l "spawning child threads for peers"
+  mapM_ (forkPeer opt tracker workChan responseChan broadcastChan pieceMap) peers
   _ <- forkIO $ checkoutTimer responseChan
 
   let workToBeDone :: [PieceRequest]
       workToBeDone = getPieceList tracker
   let filteredWorkToBeDone = fst <$> filter (not . snd . snd) (zip workToBeDone pieceMap)
   Chan.writeList2Chan workChan filteredWorkToBeDone
-  loop tracker workChan responseChan peers killChan pieceMap M.empty filteredWorkToBeDone
+  loop opt tracker workChan responseChan peers killChan pieceMap M.empty filteredWorkToBeDone
 
 checkoutTimer :: Chan.Chan ResponseMessage -> IO ()
 checkoutTimer responseChan = do
@@ -247,12 +235,12 @@ createFile :: SingleFileInfo -> IO ()
 createFile sfi =
   SIO.withBinaryFile (UTF8.toString $ sfName sfi) SIO.WriteMode $ flip SIO.hSetFileSize $ sfLength sfi
 
-writePiece :: Tracker -> SIO.FilePath -> PieceResponse -> IO ()
-writePiece tracker filePath pieceResponse = do
+writePiece :: Chan.Chan String ->  Tracker -> SIO.FilePath -> PieceResponse -> IO ()
+writePiece killChan tracker filePath pieceResponse = do
   let index = presIndex pieceResponse
       content = piecePayload pieceResponse
   fd <- PosixIO.openFd filePath PosixIO.WriteOnly Nothing PosixIO.defaultFileFlags
   written <- PosixIOBS.fdPwrite fd content $ fromIntegral $ tPieceLength tracker * index
   PosixIO.closeFd fd
   when (fromIntegral written /= BS.length content) $
-    E.throw $ userError "bad pwrite"
+    Chan.writeChan killChan "ERROR: bad pwrite"

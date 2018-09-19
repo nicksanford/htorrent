@@ -48,6 +48,10 @@ optParser = Opt <$> strOption (  long "tracker"
                                 <> value 8888
                                 <> metavar "PORT"
                                 )
+                <*> switch (  long "quit-on-complete"
+                           <> short 'q'
+                           <> help "Will quit HTorrent when torrent is complete"
+                           )
 
 opts :: ParserInfo Opt
 opts = info (optParser <**> helper)

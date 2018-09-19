@@ -41,8 +41,8 @@ import           Utils
 
 requestLimit = 10
 
-buildFSMState :: Tracker -> BS.ByteString -> BS.ByteString -> Socket -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Clock.TimeSpec -> PieceMap -> Initiator -> FSMState
-buildFSMState t fsmStateId peerID conn workC responseC time pieceMap init =
+buildFSMState :: Opt -> Tracker -> BS.ByteString -> BS.ByteString -> Socket -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Clock.TimeSpec -> PieceMap -> Initiator -> FSMState
+buildFSMState opt t fsmStateId peerID conn workC responseC time pieceMap init =
   let selfState = SelfState { selfId                   = (tPeerId t)
                             , selfPieceMap             = pieceMap
                             , selfChokingPeer          = False
@@ -58,7 +58,7 @@ buildFSMState t fsmStateId peerID conn workC responseC time pieceMap init =
                             , lastHeartBeat            = Nothing
                             , lastKeepAlive            = time
                             }
-  in FSMState fsmStateId t conn peerState selfState workC responseC Parser.defaultPeerRPCParse init
+  in FSMState fsmStateId t conn peerState selfState workC responseC Parser.defaultPeerRPCParse init opt
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
 recvLoop :: FSMState -> IO ()
@@ -68,7 +68,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
   let selfState = getSelf fsmState
   let peerState = getPeer fsmState
   let conn = getConn fsmState
-  myLog fsmState $ "Blocked on recvLoop, peerState: " <> (show fsmState)
+  fsmLog fsmState $ "Blocked on recvLoop, peerState: " <> (show fsmState)
   -- TODO If this is null but you still have checked out work, put the work back, I'm pretty sure I only need to do this on recv calls
 
   now <- Clock.getTime Clock.Monotonic
@@ -77,31 +77,31 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
 
   msg <- recv conn 16384
 
---  myLog fsmState $ " msg: " <> (show $ BS.unpack msg)
+--  fsmLog  fsmState $ " msg: " <> (show $ BS.unpack msg)
   let newPeerRPCParse = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState
   let updatedFSMState = updateFsmState fsmState newPeerRPCParse newlastKeepAlive
   E.evaluate $ rnf newPeerRPCParse
 
   case newPeerRPCParse of
     (PeerRPCParse _ (Just e) _) -> do
-      myLog updatedFSMState $ "ERROR: RECVLOOP hit parse error " <> (show newPeerRPCParse)
+      fsmLog  updatedFSMState $ "ERROR: RECVLOOP hit parse error " <> (show newPeerRPCParse)
       _ <- sendWorkBackToManager updatedFSMState
       return ()
     _ ->
       if BS.null msg then do
-        myLog updatedFSMState $ "DONE: RECVLOOP got null in receive"
+        fsmLog  updatedFSMState $ "DONE: RECVLOOP got null in receive"
         _ <- sendWorkBackToManager updatedFSMState
         return ()
       else
         if peerChokingMe $ getPeer updatedFSMState then do
           -- TODO: clear your work state and send it back to the parent
-          myLog fsmState "Peer choking, can't ask it for pieces"
+          fsmLog  fsmState "Peer choking, can't ask it for pieces"
           updatedFSMStateWithoutWork <- sendWorkBackToManager updatedFSMState
                                           >>= buildPieces
                                           >>= sendPieces
           recvLoop updatedFSMStateWithoutWork
         else do
-          myLog fsmState "Peer NOT choking, can potentially ask for pieces"
+          fsmLog  fsmState "Peer NOT choking, can potentially ask for pieces"
           finalPeerState <- sendFinishedWorkBackToManager updatedFSMState
                                 >>= buildPieces
                                 >>= sendPieces
@@ -114,7 +114,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
 maybeGetNewWork :: FSMState -> IO (Maybe PieceRequest)
 maybeGetNewWork fsmState = do
   if isNothing (peerPieceRequestFromSelf $ getPeer $ fsmState) then do
-    myLog fsmState "WORK IS EMPTY PULLING NEW WORK"
+    fsmLog  fsmState "WORK IS EMPTY PULLING NEW WORK"
     loop 0
   else
     return Nothing
@@ -124,25 +124,25 @@ maybeGetNewWork fsmState = do
 -- TODO - Change this to use getChannelContents
         loop :: Int -> IO (Maybe PieceRequest)
         loop count = do
-          myLog fsmState "going into loop"
+          fsmLog  fsmState "going into loop"
           if (count >= maxNumberofPiecesLeft) then do
-            myLog fsmState $ "looped through " <> (show count) <> " work chan messages before quitting"
+            fsmLog  fsmState $ "looped through " <> (show count) <> " work chan messages before quitting"
             return Nothing
           else do
             maybeWork <- timeout 100 (Chan.readChan $ workChan fsmState)
             case maybeWork of
               Nothing -> do
-                myLog fsmState $ "TRIED PULLING WORK BUT IT TIMED OUT"
+                fsmLog  fsmState $ "TRIED PULLING WORK BUT IT TIMED OUT"
                 return Nothing
               Just pieceRequest -> do
 
-                myLog fsmState $ "pieces that can be done " <> (show $ piecesThatCanBeDone $ peerPieceMap $ getPeer fsmState)
+                fsmLog  fsmState $ "pieces that can be done " <> (show $ piecesThatCanBeDone $ peerPieceMap $ getPeer fsmState)
                 if peerHasData fsmState pieceRequest then do
                   currentTime <- Clock.getTime Clock.Monotonic
                   Chan.writeChan (responseChan fsmState) (CheckOut (fsmId fsmState) (preqIndex pieceRequest) currentTime)
                   return $ Just pieceRequest
                 else do
-                  myLog fsmState $ "WORK CAN'T BE DONE, ON INDEX " <> (show pi) <> "BUT CAN BE DONE ON " <> (show $ piecesThatCanBeDone $ peerPieceMap $ getPeer fsmState) <> " SENDING BACK TO MANAGER AND TRYING AGAIN"
+                  fsmLog  fsmState $ "WORK CAN'T BE DONE, ON INDEX " <> (show pi) <> "BUT CAN BE DONE ON " <> (show $ piecesThatCanBeDone $ peerPieceMap $ getPeer fsmState) <> " SENDING BACK TO MANAGER AND TRYING AGAIN"
                   Chan.writeChan (responseChan fsmState) (Failed $ PieceRequest (preqIndex pieceRequest) $ preqBlockRequests pieceRequest)
                   loop (count + 1)
 
@@ -231,8 +231,7 @@ sendFinishedWorkBackToManager fsmState = do
     Nothing ->
       return fsmState
     Just (pieceRequest, payloads) -> do
-      c <- conformsToHash selfPM pieceRequest payloads
-      case c of
+      case conformsToHash selfPM pieceRequest payloads of
         Just content -> do
           let success = Succeeded (PieceResponse (preqIndex pieceRequest) content)
           Chan.writeChan (responseChan fsmState) success
@@ -240,7 +239,7 @@ sendFinishedWorkBackToManager fsmState = do
           return $ fsmState { getPeer = newPeer}
         Nothing -> do
           -- DONE log and shed the broken state
-          myLog fsmState $ "ERROR: piece " <> (show $ preqIndex pieceRequest) <> " does does not conform to hash"
+          fsmLog  fsmState $ "ERROR: piece " <> (show $ preqIndex pieceRequest) <> " does does not conform to hash"
           sendWorkBackToManager fsmState
 
 hasAllPayloads :: PieceRequest -> Maybe (PieceRequest, NonEmptyL.NonEmpty BS.ByteString)
@@ -248,17 +247,16 @@ hasAllPayloads pieceRequests = do
   list <- traverse bPayload (preqBlockRequests pieceRequests)
   return (pieceRequests, list)
 
-conformsToHash :: PieceMap -> PieceRequest -> NonEmptyL.NonEmpty BS.ByteString -> IO (Maybe BS.ByteString)
+conformsToHash :: PieceMap -> PieceRequest -> NonEmptyL.NonEmpty BS.ByteString -> Maybe BS.ByteString
 conformsToHash pieceMap pieceRequest payloads = do
 --  let sortedBlockRequests = NonEmptyL.sortBy (\a b -> bBegin a `compare` bBegin b) (preqBlockRequests pieceRequests)
 --  let maybeNonEmptyPayloadList = traverse (\br -> (\p -> (bBegin br, p)) <$> bPayload br ) sortedBlockRequests
   let combinedPayload = BS.concat $ (NonEmptyL.toList payloads)
   let (expectedSha, _) = pieceMap !! (fromIntegral $ preqIndex pieceRequest)
   if expectedSha == shaHashRaw combinedPayload then
-    return $ Just combinedPayload
-  else do
-    putStrLn $ "Expected sha: " <> (UTF8.toString expectedSha) <> " shaHashRaw " <> (UTF8.toString $ shaHashRaw combinedPayload) <> " " <> (show payloads)
-    return $ Nothing
+    Just combinedPayload
+  else
+    Nothing
 
 initPieceMap :: Tracker -> PieceMap
 initPieceMap t = (, False) <$> tPieceHashes t
@@ -294,7 +292,7 @@ buildPieces fsmState = do -- @(FSMState fsmID singleFileInfo pieceLength conn pe
 
 sendPieces :: FSMState -> IO FSMState
 sendPieces fsmState = do --(FSMState a (Conn conn) c d (RPCParse (PeerRPCParse buffer err parsedRPCs)) f g h i j pieces) = do
---  myLog fsmState $ "sending " <> (show $ length $ pieces fsmState) <> " pieces to peer " <> (show $ pieces fsmState)
+--  fsmLog  fsmState $ "sending " <> (show $ length $ pieces fsmState) <> " pieces to peer " <> (show $ pieces fsmState)
   let peer = getPeer fsmState
       bs = BS.concat (blockResponseToBS <$> blockResponsesForPeer peer)
   sendAll (getConn fsmState) bs
@@ -346,7 +344,7 @@ sendRequests fsmState = do
         f :: BlockRequest -> IO BlockRequest
         f blockRequest = do
             let r = request (bIndex blockRequest) (bBegin blockRequest) (bLength blockRequest)
-            --myLog fsmState $ " sending request " <> (show r)
+            --fsmLog  fsmState $ " sending request " <> (show r)
             sendAll (getConn fsmState) r
             let newSentCount = (bSentCount blockRequest) + 1
             return $ blockRequest {bSentCount = newSentCount}
@@ -388,6 +386,5 @@ chunkWithDefault d i xs =
 tryToPullWork :: FSMState-> IO FSMState
 tryToPullWork fsmState = do
   maybeNewWork <- maybeGetNewWork fsmState
-  myLog fsmState $ show maybeNewWork
   let peer = getPeer fsmState
   return $ maybe fsmState (\newPieceRequest -> fsmState {getPeer = peer { peerPieceRequestFromSelf = Just newPieceRequest }}) maybeNewWork

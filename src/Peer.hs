@@ -44,23 +44,26 @@ import           System.Timeout                               (timeout)
 import           Utils                                        (shaHashRaw,
                                                                unhex)
 
-start :: Tracker -> Peer -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
-start tracker peer workC responseChan broadcastC pieceMap =  do
-  putStrLn $ "Initiating handshake with " <> show peer
+start :: Opt -> Tracker -> Peer -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
+start opt tracker peer workC responseChan broadcastC pieceMap =  do
+  when (debug opt) $
+    putStrLn $ "Initiating handshake with " <> show peer
   maybePeerResponse <- initiateHandshake tracker peer
-  putStrLn $ "Handshake result " <> show maybePeerResponse <>  " with " <> show peer
+  when (debug opt) $
+    putStrLn $ "Handshake result " <> show maybePeerResponse <>  " with " <> show peer
   unless (isNothing maybePeerResponse) $ do
     let (peerResponse, conn) = fromJust maybePeerResponse
     let bitMap = pieceMapToBitField pieceMap
-    putStrLn $ "Sending pieceMap to peer " <> show peer <> " bitmap: " <> show bitMap <> "\nas well as interested & unchoke"
+    when (debug opt) $
+      putStrLn $ "Sending pieceMap to peer " <> show peer <> " bitmap: " <> show bitMap <> "\nas well as interested & unchoke"
     sendAll conn bitMap
     sendAll conn interested
     sendAll conn unchoke
     time <- Clock.getTime Clock.Monotonic
     let threadId = pIP peer <> (UTF8.fromString $ show $ pPort peer)
-    let fsmState = buildFSMState tracker threadId (prPeerId peerResponse) conn workC responseChan time pieceMap SelfInitiated
-    myLog fsmState $ " Starting recvLoop"
+    let fsmState = buildFSMState opt tracker threadId (prPeerId peerResponse) conn workC responseChan time pieceMap SelfInitiated
+    fsmLog fsmState $ " Starting recvLoop"
     E.catch (recvLoop fsmState) (\e -> do
-                                    myLog fsmState $ " HIT EXCEPTION " <> (show (e :: E.SomeException))
+                                    fsmLog fsmState $ " HIT EXCEPTION " <> (show (e :: E.SomeException))
                                     E.throw e
                                 )

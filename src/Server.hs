@@ -4,7 +4,7 @@ module Server (start) where
 import           Control.Concurrent        (forkFinally)
 import           Control.Concurrent.Chan   as Chan
 import qualified Control.Exception         as E
-import           Control.Monad             (forever, void)
+import           Control.Monad             (forever, void, when)
 import qualified Data.ByteString           as BS
 import qualified Data.ByteString.UTF8      as UTF8
 import           Network.Socket            hiding (recv)
@@ -39,24 +39,26 @@ start opt tracker workC responseChan broadcastChan pieceMap = do
 
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          putStrLn $ "LOOP: Accepted connection " <> show conn
-                                                  <> " from "
-                                                  <> show peer
-                                                  <> "\nBlocking until handshake is received"
+          when (debug opt) $
+            putStrLn $ "LOOP: Accepted connection " <> show conn
+                                                    <> " from "
+                                                    <> show peer
+                                                    <> "\nBlocking until handshake is received"
 
-          let threadEndHandler _ = putStrLn ("closing " <> show conn <> "  from " <> show peer)
+          let threadEndHandler _ = when (debug opt) (putStrLn ("closing " <> show conn <> "  from " <> show peer))
                                    >> close conn
           void $ forkFinally (talk conn peer) threadEndHandler
 
         talk conn peer = do
           msg <- recv conn 68
           let maybeHandshakeResponse = readHandShake msg >>= validateHandshake tracker
-          putStrLn $ "Peer " <> show peer
-                             <> " sent handshake "
-                             <> show maybeHandshakeResponse
-                             <> "\nraw: "
-                             <> UTF8.toString msg
-                             <> " as the handshake"
+          when (debug opt) $
+            putStrLn $ "Peer " <> show peer
+                              <> " sent handshake "
+                              <> show maybeHandshakeResponse
+                              <> "\nraw: "
+                              <> UTF8.toString msg
+                              <> " as the handshake"
 
           case maybeHandshakeResponse of
             Just peerResponse -> do
@@ -64,18 +66,19 @@ start opt tracker workC responseChan broadcastChan pieceMap = do
               sendAll conn handshakeBS
               let bf = pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              let fsmState = buildFSMState tracker (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseChan time pieceMap PeerInitiated
-              myLog fsmState $ " got handshake: " <> show (BS.unpack bf)
+              let fsmState = buildFSMState opt tracker (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseChan time pieceMap PeerInitiated
+              fsmLog fsmState $ " got handshake: " <> show (BS.unpack bf)
                                                        <> " along with interested & unchoke messages "
-              myLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
+              fsmLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
                                                           <> " along with interested & unchoke messages "
               sendAll conn bf
               sendAll conn interested
               sendAll conn unchoke
-              let handleException e = myLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
+              let handleException e = fsmLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
               E.catch (recvLoop fsmState) handleException
             Nothing -> do
-              putStrLn $ "Peer " <> show peer
-                                 <> " got invalid handshake response "
-                                 <> show maybeHandshakeResponse
+              when (debug opt) $
+                putStrLn $ "Peer " <> show peer
+                                  <> " got invalid handshake response "
+                                  <> show maybeHandshakeResponse
               return ()

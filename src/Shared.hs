@@ -15,10 +15,11 @@ import           GHC.Generics            (Generic)
 import           Network.Socket
 import qualified System.Clock            as Clock
 
-data Opt = Opt { tracker :: String
-               , debug   :: Bool
-               , port    :: Integer
-               }
+data Opt = Opt { tracker      :: String
+               , debug        :: Bool
+               , port         :: Integer
+               , quitWhenDone :: Bool
+               } deriving (Eq)
 
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.
 data BlockRequest = BlockRequest { bIndex     :: Integer
@@ -61,6 +62,7 @@ data FSMState = FSMState { fsmId        :: BS.ByteString
                          , responseChan :: Chan.Chan ResponseMessage
                          , rpcParse     :: PeerRPCParse
                          , initiator    :: Initiator
+                         , opt          :: Opt
                          }
                          deriving (Eq)
 
@@ -199,7 +201,13 @@ instance Show PeerRPCParse where
 blockSize :: Integer
 blockSize = (2::Integer)^(14::Integer) -- 16k
 
-myLog :: FSMState -> String -> IO ()
-myLog fsmState msg = do
-  now <- Clock.getTime Clock.Monotonic
-  putStrLn $ (show now) <> "\n" <> msg <> "\n" <> (show fsmState) <> "\n\n"
+fsmLog :: FSMState -> String -> IO ()
+fsmLog fsmState msg
+  | debug (opt fsmState ) = Clock.getTime Clock.Monotonic >>=
+                (\now -> putStrLn $ (show now) <> "\n" <> msg <> "\n" <> (show fsmState) <> "\n\n")
+  | otherwise = return ()
+
+log :: Opt -> String -> IO ()
+log opt msg
+  | debug opt = putStrLn msg
+  | otherwise = return ()

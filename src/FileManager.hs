@@ -1,35 +1,41 @@
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PackageImports    #-}
+{-# LANGUAGE TupleSections     #-}
 
 module FileManager where
-import Tracker
-import Shared
+import           Control.Concurrent                           (ThreadId,
+                                                               forkFinally,
+                                                               forkIO,
+                                                               threadDelay)
+import qualified Control.Concurrent.Chan                      as Chan
+import qualified Control.Concurrent.STM.TChan                 as TChan
+import           Control.DeepSeq                              (rnf)
+import qualified Control.Exception                            as E
+import           Control.Monad                                (unless, when)
+import qualified Data.ByteString                              as BS
+import qualified Data.ByteString.Lazy                         as LBS
+import qualified Data.ByteString.UTF8                         as UTF8
+import           Data.Foldable                                (forM_)
+import qualified Data.List                                    as L
+import qualified Data.List.NonEmpty                           as NonEmptyL
+import qualified Data.Map                                     as M
+import           Data.Maybe                                   (fromJust, isJust,
+                                                               isNothing)
+import qualified Peer                                         as Peer
 import qualified Server
-import Utils (unhex, shaHashRaw, shaHash)
-import qualified System.IO as SIO
-import qualified Control.Concurrent.Chan as Chan
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.List as L
-import qualified Data.Map as M
-import Data.Maybe (isJust, fromJust, isNothing)
-import qualified System.IO as SIO
-import qualified System.Directory as Dir
-import qualified Peer as Peer
-import Data.Foldable (forM_)
-import System.Exit (exitSuccess)
-import Control.Monad (when, unless)
-import Control.Concurrent (forkFinally, forkIO, ThreadId, threadDelay)
-import qualified System.Clock as Clock
-import qualified Control.Concurrent.STM.TChan as TChan
-import qualified System.Posix.IO as PosixIO
+import           Shared
+import qualified System.Clock                                 as Clock
+import qualified System.Directory                             as Dir
+import           System.Exit                                  (exitSuccess)
+import qualified System.IO                                    as SIO
+import qualified System.IO                                    as SIO
+import qualified System.Posix.Files.ByteString                as PosixFilesBS
+import qualified System.Posix.IO                              as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
-import qualified System.Posix.Files.ByteString as PosixFilesBS
-import qualified Control.Exception as E
-import Control.DeepSeq (rnf)
-import qualified Data.List.NonEmpty as NonEmptyL
+import           Tracker
+import           Utils                                        (shaHash,
+                                                               shaHashRaw,
+                                                               unhex)
 
 
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]

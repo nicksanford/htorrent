@@ -5,24 +5,20 @@ module Tracker ( toTracker
                , load
                ) where
 
-import Data.List (unfoldr)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.Map as M
-import qualified Network.HTTP.Simple as HTTP
-import System.FilePath.Posix (takeDirectory, joinPath)
+import qualified Data.ByteString       as BS
+import qualified Data.ByteString.UTF8  as UTF8
+import           Data.List             (unfoldr)
+import qualified Data.Map              as M
+import qualified Network.HTTP.Simple   as HTTP
+import           System.FilePath.Posix (joinPath, takeDirectory)
 
-import BEncode ( BEncode (..)
-               , Run (..)
-               , bencodeToMaybeString
-               , bencodeToMaybeDict
-               , bencodeToMaybeInteger
-               , decode
-               , encode
-               , maybeReadBencode
-               )
-import Shared
-import Utils (escape, shaHash, getPeerID)
+import           BEncode               (BEncode (..), Run (..),
+                                        bencodeToMaybeDict,
+                                        bencodeToMaybeInteger,
+                                        bencodeToMaybeString, decode, encode,
+                                        maybeReadBencode)
+import           Shared
+import           Utils                 (escape, getPeerID, shaHash)
 
 -- TODO: Currently I am only dealing with single file info. I will add support for multi file info later.
 toTracker :: BS.ByteString -> BEncode -> Either BS.ByteString Tracker

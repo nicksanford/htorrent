@@ -1,37 +1,48 @@
-{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE DeriveAnyClass    #-}
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PackageImports    #-}
 module Peer where
 
-import           Control.Monad             (unless, forM_, when)
-import           Data.List                 (find, foldl', sortOn)
-import           Data.Maybe                (fromJust, isNothing, listToMaybe, fromMaybe, isJust)
-import           Utils                     (unhex, shaHashRaw)
-import           FSM     
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (send, sendAll, recv)
-import RPCMessages (initiateHandshake, interested, unchoke)
-import Control.DeepSeq
-import Data.Foldable             (toList)
-import Shared
-import System.Timeout             (timeout)
+import qualified Control.Concurrent.Chan                      as Chan
+import           Control.DeepSeq
+import qualified Control.Exception                            as E
+import           Control.Monad                                (forM_, unless,
+                                                               when)
+import qualified Data.Binary                                  as Binary
+import qualified Data.Bits                                    as Bits
+import qualified Data.Bits.Bitwise                            as Bitwise
+import qualified Data.ByteString                              as BS
+import qualified Data.ByteString.Base16                       as B16
+import qualified Data.ByteString.Lazy                         as Lazy
+import qualified Data.ByteString.UTF8                         as UTF8
+import qualified Data.Either                                  as Either
+import           Data.Foldable                                (toList)
+import           Data.List                                    (find, foldl',
+                                                               sortOn)
+import qualified Data.Map                                     as M
+import           Data.Maybe                                   (fromJust,
+                                                               fromMaybe,
+                                                               isJust,
+                                                               isNothing,
+                                                               listToMaybe)
+import qualified Data.Sequence                                as Seq
+import qualified Data.Set                                     as S
+import           FSM
+import           Network.Socket                               hiding (recv)
+import           Network.Socket.ByteString                    (recv, send,
+                                                               sendAll)
+import           RPCMessages                                  (initiateHandshake,
+                                                               interested,
+                                                               unchoke)
+import           Shared
+import qualified System.Clock                                 as Clock
+import qualified System.Posix.Files.ByteString                as PosixFilesBS
+import qualified System.Posix.IO                              as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
-import qualified Control.Exception as E
-import qualified Data.Binary               as Binary
-import qualified Data.Bits                 as Bits
-import qualified Data.Bits.Bitwise         as Bitwise
-import qualified Data.ByteString           as BS
-import qualified Data.ByteString.Base16    as B16
-import qualified Data.ByteString.Lazy    as Lazy
-import qualified Data.ByteString.UTF8      as UTF8
-import qualified Data.Either               as Either
-import qualified Data.Map                  as M
-import qualified Data.Sequence             as Seq
-import qualified Data.Set as S
-import qualified System.Clock as Clock
-import qualified System.Posix.Files.ByteString as PosixFilesBS
-import qualified System.Posix.IO as PosixIO
-import qualified Control.Concurrent.Chan as Chan
+import           System.Timeout                               (timeout)
+import           Utils                                        (shaHashRaw,
+                                                               unhex)
 
 start :: Tracker -> Peer -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
 start tracker peer workC responseChan broadcastC pieceMap =  do

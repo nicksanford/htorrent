@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PackageImports    #-}
+{-# LANGUAGE TupleSections     #-}
 
 module FSM ( recvLoop
            , pieceMapToBitField
@@ -9,30 +9,35 @@ module FSM ( recvLoop
            , blockResponseToBS
            ) where
 
-import Shared
-import Utils
-import RPCMessages (keepAlive, request)
-import Parser ( defaultPeerRPCParse
-              , parseRPC
-              )
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (send, sendAll, recv)
-import Control.Concurrent.Chan as Chan
-import qualified System.Clock as Clock
-import qualified Control.Exception as E
+import           Control.Concurrent.Chan                      as Chan
+import           Control.DeepSeq                              (rnf)
+import qualified Control.Exception                            as E
+import           Control.Monad                                (when)
+import qualified Data.Bits.Bitwise                            as Bitwise
+import qualified Data.ByteString                              as BS
+import qualified Data.ByteString.UTF8                         as UTF8
+import           Data.Foldable                                (find, foldl')
+import           Data.List                                    (sortOn)
+import qualified Data.List.NonEmpty                           as NonEmptyL
+import           Data.Maybe                                   (fromJust,
+                                                               fromMaybe,
+                                                               isJust,
+                                                               isNothing,
+                                                               listToMaybe)
+import           Network.Socket                               hiding (recv)
+import           Network.Socket.ByteString                    (recv, send,
+                                                               sendAll)
+import           Parser                                       (defaultPeerRPCParse,
+                                                               parseRPC)
+import           RPCMessages                                  (keepAlive,
+                                                               request)
+import           Shared
+import qualified System.Clock                                 as Clock
+import qualified System.Posix.Files.ByteString                as PosixFilesBS
+import qualified System.Posix.IO                              as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
-import qualified System.Posix.Files.ByteString as PosixFilesBS
-import qualified System.Posix.IO   as PosixIO
-import qualified Data.Bits.Bitwise as Bitwise
-import Data.Maybe (isJust, fromJust, isNothing, listToMaybe, fromMaybe)
-import Control.Monad (when)
-import Control.DeepSeq  (rnf)
-import System.Timeout             (timeout)
-import Data.Foldable (find, foldl')
-import Data.List (sortOn)
-import qualified Data.List.NonEmpty as NonEmptyL
+import           System.Timeout                               (timeout)
+import           Utils
 
 requestLimit = 10
 
@@ -178,11 +183,11 @@ updateFsmState fsmState updatedPeerRPCParse newKeepAliveTime = do
         updatePieceWithHave (Have key) acc = fmap (\(k,v) -> if k == key then (k,True) else (k,v)) acc
         updatePieceWithHave _ acc = acc
         updatePeerChoking :: Bool -> PeerRPC -> Bool
-        updatePeerChoking _ Choke  = True
+        updatePeerChoking _ Choke   = True
         updatePeerChoking _ UnChoke = False
-        updatePeerChoking acc _ = acc
+        updatePeerChoking acc _     = acc
         onlyResponses Response{} = True
-        onlyResponses _ = False
+        onlyResponses _          = False
         onlyInterestedOrNotInterested Interested    = True
         onlyInterestedOrNotInterested NotInterested = True
         onlyInterestedOrNotInterested _             = False
@@ -194,7 +199,7 @@ updateFsmState fsmState updatedPeerRPCParse newKeepAliveTime = do
 
 maybeUpdateBlockRequest :: [BlockResponse] -> BlockRequest -> BlockRequest
 maybeUpdateBlockRequest responses blockRequest =
-  maybe blockRequest (\x -> blockRequest { bPayload = Just (pBlock x) }) (find f responses) 
+  maybe blockRequest (\x -> blockRequest { bPayload = Just (pBlock x) }) (find f responses)
   where f blockResponse =
           isNothing (bPayload blockRequest) &&
           pIndex blockResponse == bIndex blockRequest &&
@@ -273,7 +278,7 @@ fetchBlockResponses pieceLen singleFileInfo rpcs = do
 
 isRequest :: PeerRPC -> Bool
 isRequest (Request{}) = True
-isRequest _         = False
+isRequest _           = False
 
 buildPieces :: FSMState -> IO FSMState
 buildPieces fsmState = do -- @(FSMState fsmID singleFileInfo pieceLength conn peer self wc rc rpc work pieces lhb lka initiator) = do-- (PeerState a b c d (RPCParse (PeerRPCParse buffer err parsedRPCs)) f g h i j pieces) = do
@@ -309,7 +314,7 @@ newKeepAlive now old =
   else old
 
 filterCompletedBlocks :: BlockRequest -> Bool
-filterCompletedBlocks = isJust . bPayload 
+filterCompletedBlocks = isJust . bPayload
 
 filterWorkingBlocks :: BlockRequest -> Bool
 filterWorkingBlocks b = (bSentCount b /= 0) && (isNothing $ bPayload b)-- (Block _ _ _ (SentTimestamp (Just _)) _ Nothing) = True
@@ -358,7 +363,7 @@ pieceMapToBitField pieceMap = do
 
 peerRPCToPiece :: PeerRPC -> Maybe BlockResponse
 peerRPCToPiece (Response (br@BlockResponse{})) = Just br
-peerRPCToPiece _                            = Nothing
+peerRPCToPiece _                               = Nothing
 
 mergePieceMaps :: PieceMap -> PieceMap -> PieceMap
 mergePieceMaps = zipWith (\(x,xbool) (_,ybool) -> (x, xbool || ybool))

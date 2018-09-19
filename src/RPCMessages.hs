@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module RPCMessages where
 
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (recv, sendAll)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.Word8 as W
-import Data.Maybe (listToMaybe)
-import Shared
-import Utils
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.UTF8      as UTF8
+import           Data.Maybe                (listToMaybe)
+import qualified Data.Word8                as W
+import           Network.Socket            hiding (recv)
+import           Network.Socket.ByteString (recv, sendAll)
+import           Shared
+import           Utils
 
 keepAlive :: BS.ByteString
 keepAlive = BS.pack [0,0,0,0]
@@ -80,7 +80,7 @@ sendHandshake (Shared.Peer ip port) bs = do
   where hints = defaultHints { addrSocketType = Stream }
         addrIO = head <$> getAddrInfo (Just hints) (Just $ UTF8.toString ip) (Just $ show port)
         open addr = do
-          -- TODO Consider setting recv timeout https://hackage.haskell.org/package/network-2.7.0.2/docs/Network-Socket.html 
+          -- TODO Consider setting recv timeout https://hackage.haskell.org/package/network-2.7.0.2/docs/Network-Socket.html
           sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
           connect sock $ addrAddress addr
           return sock

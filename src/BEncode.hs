@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module BEncode where
 
-import Data.List (unfoldr, sortOn)
-import Data.Maybe (isNothing, fromJust, fromMaybe)
-import qualified Data.ByteString as BS
+import qualified Data.ByteString      as BS
 import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.Map as M
-import qualified Data.Word8 as W
+import           Data.List            (sortOn, unfoldr)
+import qualified Data.Map             as M
+import           Data.Maybe           (fromJust, fromMaybe, isNothing)
+import qualified Data.Word8           as W
 
 data BEncode = BInteger Integer
              | BString BS.ByteString
@@ -80,7 +80,7 @@ decode xs =
 decodeType :: BencodeParseType -> BS.ByteString ->  Run BEncode
 decodeType PDict xs =
   case (unfold, isNothing maybeRest) of
-    ([], _) -> Run "" dict
+    ([], _)    -> Run "" dict
     (_, False) -> Run (fromJust maybeRest) dict
     _          -> Run (BS.concat ["l", xs]) Nothing
   where unfold :: [(Run BEncode, Run BEncode)]
@@ -95,9 +95,9 @@ decodeType PDict xs =
 
 decodeType PList xs =
   case (unfold, isNothing maybeRest) of
-    ([], _) -> Run "" list
+    ([], _)    -> Run "" list
     (_, False) -> Run (fromJust maybeRest) list
-    _ -> Run (BS.concat ["l", xs]) Nothing
+    _          -> Run (BS.concat ["l", xs]) Nothing
   where unfold = unfoldr unfoldList xs
         list = fmap BList $ if any isNothing maybeList
                             then Nothing
@@ -133,7 +133,7 @@ isEnd = (== "e") . BS.singleton
 parseString :: BS.ByteString -> Run BEncode
 parseString xs =
   case probablyInt of
-    Nothing -> Run xs Nothing
+    Nothing  -> Run xs Nothing
     (Just i) -> Run  (restOfString i) (Just (BString $ string i))
   where afterNumber :: BS.ByteString
         afterNumber = BS.tail $ BS.dropWhile isNotSeparator xs
@@ -144,7 +144,7 @@ parseString xs =
         isNotSeparator = (/= ":") . BS.singleton
 
 maybeHead :: [a] -> Maybe a
-maybeHead [] = Nothing
+maybeHead []    = Nothing
 maybeHead (x:_) = Just x
 
 charsToMaybeInt :: BS.ByteString -> Maybe Int
@@ -159,7 +159,7 @@ bencodeToMaybeString _           = Nothing
 
 bencodeToMaybeInteger :: BEncode -> Maybe Integer
 bencodeToMaybeInteger (BInteger a) = Just a
-bencodeToMaybeInteger _           = Nothing
+bencodeToMaybeInteger _            = Nothing
 
 bencodeToMaybeDict :: BEncode -> Maybe (M.Map BEncode BEncode)
 bencodeToMaybeDict (BDict a) = Just a

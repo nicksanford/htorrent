@@ -3,16 +3,16 @@ module Parser ( defaultPeerRPCParse
               , parseRPC)
 where
 
-import Data.Foldable (toList, length)
-import Data.Maybe (fromJust)
-import Prelude hiding (length)
-import qualified Data.Bits as Bits
+import qualified Data.Bits       as Bits
 import qualified Data.ByteString as BS
-import qualified Data.Sequence as Seq
-import qualified Data.Word8 as W
+import           Data.Foldable   (length, toList)
+import           Data.Maybe      (fromJust)
+import qualified Data.Sequence   as Seq
+import qualified Data.Word8      as W
+import           Prelude         hiding (length)
 
-import Shared
-import Utils
+import           Shared
+import           Utils
 
 defaultPeerRPCParse :: PeerRPCParse
 defaultPeerRPCParse = PeerRPCParse Seq.empty Nothing []

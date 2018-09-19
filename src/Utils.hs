@@ -1,20 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Utils where
 
-import Crypto.Random (getRandomBytes)
-import Data.List (unfoldr)
-import Data.Maybe (isJust)
-import Numeric (readHex)
-import qualified Crypto.Hash as C
-import qualified Data.ByteArray as BA
+import qualified Crypto.Hash             as C
+import           Crypto.Random           (getRandomBytes)
+import qualified Data.Binary             as Binary
+import qualified Data.ByteArray          as BA
 import qualified Data.ByteArray.Encoding as BAE
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Base16 as B16
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.Word8 as W
-import qualified System.Random as R
-import qualified Data.Binary as Binary
+import qualified Data.ByteString         as BS
+import qualified Data.ByteString.Base16  as B16
+import qualified Data.ByteString.Lazy    as LBS
+import qualified Data.ByteString.UTF8    as UTF8
+import           Data.List               (unfoldr)
+import           Data.Maybe              (isJust)
+import qualified Data.Word8              as W
+import           Numeric                 (readHex)
+import qualified System.Random           as R
 
 allowed :: BS.ByteString
 allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXZYZ0123456789.-_~"
@@ -54,9 +54,9 @@ shaHashRaw = BS.pack . BS.unpack . (BA.convert .  (C.hashWith C.SHA1 :: BS.ByteS
 
 unescape :: BS.ByteString -> BS.ByteString
 unescape x = case fmap (\(a,b) -> (BS.singleton a, b)) (BS.uncons x) of
-  Nothing -> x
+  Nothing            -> x
   (Just ("%", rest)) -> BS.concat [BS.take 2 rest, unescape $ BS.drop 2 rest]
-  (Just (_, rest)) -> BS.concat [BS.take 2 rest, unescape $ BS.drop 2 rest]
+  (Just (_, rest))   -> BS.concat [BS.take 2 rest, unescape $ BS.drop 2 rest]
 
 unhex :: BS.ByteString -> BS.ByteString
 unhex x =

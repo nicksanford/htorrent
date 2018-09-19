@@ -1,21 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Server (start) where
 
-import Control.Concurrent (forkFinally)
-import Control.Concurrent.Chan as Chan
-import Control.Monad (forever, void)
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (recv, sendAll)
-import qualified Control.Exception as E
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified System.Clock as Clock
+import           Control.Concurrent        (forkFinally)
+import           Control.Concurrent.Chan   as Chan
+import qualified Control.Exception         as E
+import           Control.Monad             (forever, void)
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.UTF8      as UTF8
+import           Network.Socket            hiding (recv)
+import           Network.Socket.ByteString (recv, sendAll)
+import qualified System.Clock              as Clock
 
+import           FSM
 import qualified Peer
-import Shared
-import Tracker
-import RPCMessages (handshake, readHandShake, validateHandshake, interested, unchoke)
-import FSM
+import           RPCMessages               (handshake, interested,
+                                            readHandShake, unchoke,
+                                            validateHandshake)
+import           Shared
+import           Tracker
 
 start :: String -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
 start port tracker workC responseChan broadcastChan pieceMap = do

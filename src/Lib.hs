@@ -3,11 +3,11 @@ module Lib where
 import qualified BEncode
 import qualified FileManager
 import qualified Shared
-import Tracker (trackerRequest, toTracker)
-import Utils (getPeerID)
+import           Tracker                 (toTracker, trackerRequest)
+import           Utils                   (getPeerID)
 
-import Control.Concurrent (forkFinally, forkIO)
-import Control.Concurrent.Chan (newChan, writeChan, Chan)
+import           Control.Concurrent      (forkFinally, forkIO)
+import           Control.Concurrent.Chan (Chan, newChan, writeChan)
 
 run :: String -> String -> Chan String -> IO ()
 run filename port killChan = do

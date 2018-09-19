@@ -1,33 +1,34 @@
-{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE DeriveAnyClass    #-}
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Shared where
 
-import Network.Socket
-import Control.DeepSeq 
-import GHC.Generics (Generic)
 import qualified Control.Concurrent.Chan as Chan
-import qualified Data.ByteString           as BS
-import qualified Data.ByteString.UTF8      as UTF8
-import qualified Data.Sequence             as Seq
-import qualified Data.Word8                as W
-import qualified System.Clock as Clock
-import qualified Data.List.NonEmpty as NonEmptyL
+import           Control.DeepSeq
+import qualified Data.ByteString         as BS
+import qualified Data.ByteString.UTF8    as UTF8
+import qualified Data.List.NonEmpty      as NonEmptyL
+import qualified Data.Sequence           as Seq
+import qualified Data.Word8              as W
+import           GHC.Generics            (Generic)
+import           Network.Socket
+import qualified System.Clock            as Clock
 
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.
-data BlockRequest = BlockRequest { bIndex             :: Integer
-                                 , bBegin             :: Integer
-                                 , bLength            :: Integer
-                                 , bInitiator         :: Initiator
-                                 , bSentCount         :: Integer
-                                 , bPayload           :: Maybe Payload
+data BlockRequest = BlockRequest { bIndex     :: Integer
+                                 , bBegin     :: Integer
+                                 , bLength    :: Integer
+                                 , bInitiator :: Initiator
+                                 , bSentCount :: Integer
+                                 , bPayload   :: Maybe Payload
                                  } deriving (Eq, Show, Generic, NFData, Ord)
 
 data PieceRequest = PieceRequest { preqIndex :: Integer
                                  , preqBlockRequests :: NonEmptyL.NonEmpty BlockRequest
                                  } deriving (Eq, Show)
 
-data PieceResponse = PieceResponse { presIndex :: Integer
+data PieceResponse = PieceResponse { presIndex    :: Integer
                                    , piecePayload :: BS.ByteString
                                    } deriving (Eq, Show)
 
@@ -46,15 +47,15 @@ data ResponseMessage = Failed PieceRequest
                      deriving (Eq, Show)
 
 
-data FSMState = FSMState { fsmId             :: BS.ByteString
-                         , getTracker        :: Tracker
-                         , getConn           :: Socket
-                         , getPeer           :: PeerState
-                         , getSelf           :: SelfState
-                         , workChan          :: Chan.Chan PieceRequest
-                         , responseChan      :: Chan.Chan ResponseMessage
-                         , rpcParse          :: PeerRPCParse
-                         , initiator         :: Initiator
+data FSMState = FSMState { fsmId        :: BS.ByteString
+                         , getTracker   :: Tracker
+                         , getConn      :: Socket
+                         , getPeer      :: PeerState
+                         , getSelf      :: SelfState
+                         , workChan     :: Chan.Chan PieceRequest
+                         , responseChan :: Chan.Chan ResponseMessage
+                         , rpcParse     :: PeerRPCParse
+                         , initiator    :: Initiator
                          }
                          deriving (Eq)
 
@@ -62,18 +63,18 @@ data Initiator = SelfInitiated
                | PeerInitiated
                deriving (Eq, Show, Generic, NFData, Ord)
 
-data Peer = Peer { pIP :: BS.ByteString
+data Peer = Peer { pIP   :: BS.ByteString
                  , pPort :: Integer
                  } deriving (Eq, Show)
 
 data PeerResponse = PeerResponse { prInfoHash :: BS.ByteString
-                                 , prPeerId :: BS.ByteString
+                                 , prPeerId   :: BS.ByteString
                                  } deriving (Eq, Show, Generic, NFData)
 
 
 data PeerRPCParse = PeerRPCParse { pRPCUnparsed :: Seq.Seq W.Word8
-                                 , pRPCError :: Maybe BS.ByteString
-                                 , pRPCParsed :: [PeerRPC]
+                                 , pRPCError    :: Maybe BS.ByteString
+                                 , pRPCParsed   :: [PeerRPC]
                                  } deriving (Eq, Generic, NFData)
 
 data PeerRPC = PeerKeepAlive
@@ -118,10 +119,10 @@ showPieceRequest Nothing = "Nothing"
 showPieceRequest (Just pr) = "PieceRequest { " <> "preqIndex = " <> show (preqIndex pr) <> " preqBlockRequests = " <> (show $ NonEmptyL.length $ preqBlockRequests pr ) <> " }"
 
 -- TODO refactor this to have an instance of functor on PieceRequest, preqIndex should be part of the functoral structure and preqBlockRequests should be what is fmapped over
-data SelfState = SelfState { selfId                   :: BS.ByteString
-                           , selfPieceMap             :: PieceMap
-                           , selfChokingPeer          :: Bool
-                           , selfInterestedInPeer     :: Bool
+data SelfState = SelfState { selfId               :: BS.ByteString
+                           , selfPieceMap         :: PieceMap
+                           , selfChokingPeer      :: Bool
+                           , selfInterestedInPeer :: Bool
                            } deriving (Eq)
 
 instance Show SelfState where

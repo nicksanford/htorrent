@@ -70,11 +70,10 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
 
   msg <- recv conn 16384
 
-  myLog fsmState $ " msg: " <> (show $ BS.unpack msg)
+--  myLog fsmState $ " msg: " <> (show $ BS.unpack msg)
   let newPeerRPCParse = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState
   let updatedFSMState = updateFsmState fsmState newPeerRPCParse newlastKeepAlive
   E.evaluate $ rnf newPeerRPCParse
-  myLog updatedFSMState $ " newPeerRPCParse: " <> (show newPeerRPCParse)
 
   case newPeerRPCParse of
     (PeerRPCParse _ (Just e) _) -> do
@@ -83,19 +82,17 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
       return ()
     _ ->
       if BS.null msg then do
-        myLog updatedFSMState $ "DONE: RECVLOOP got null in receive "
+        myLog updatedFSMState $ "DONE: RECVLOOP got null in receive"
         _ <- sendWorkBackToManager updatedFSMState
         return ()
-      else do
-
-        -- putStrLn $ "RECVLOOP after update: " <> show updatedFSMState
+      else
         if peerChokingMe $ getPeer updatedFSMState then do
           -- TODO: clear your work state and send it back to the parent
           myLog fsmState "Peer choking, can't ask it for pieces"
           updatedFSMStateWithoutWork <- sendWorkBackToManager updatedFSMState
                                           >>= buildPieces
                                           >>= sendPieces
-          recvLoop updatedFSMStateWithoutWork-- newPeerRPCParse workChan responseChan currentWork
+          recvLoop updatedFSMStateWithoutWork
         else do
           myLog fsmState "Peer NOT choking, can potentially ask for pieces"
           finalPeerState <- sendFinishedWorkBackToManager updatedFSMState
@@ -105,7 +102,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
                                 >>= sendRequests
 
 
-          recvLoop finalPeerState-- newPeerRPCParse workChan responseChan currentWork
+          recvLoop finalPeerState
 
 maybeGetNewWork :: FSMState -> IO (Maybe PieceRequest)
 maybeGetNewWork fsmState = do
@@ -147,7 +144,6 @@ findBitField (BitField _) = True
 findBitField _            = False
 
 updateFsmState :: FSMState -> PeerRPCParse -> Clock.TimeSpec -> FSMState
---updateFsmState (FSMState id singleFileInfo pieceLength conn peer self wc rc rpc work p lhb lka initiator) (PeerRPCParse w8 e peerRPCs) newKeepAliveTime = do
 updateFsmState fsmState updatedPeerRPCParse newKeepAliveTime = do
   let peer = getPeer fsmState
   let oldPieceMap = peerPieceMap peer
@@ -222,32 +218,40 @@ sendFinishedWorkBackToManager :: FSMState -> IO FSMState
 sendFinishedWorkBackToManager fsmState = do
   let peerState = getPeer fsmState
   let selfPM = selfPieceMap $ getSelf fsmState
-
-  case (peerPieceRequestFromSelf peerState) of
+  let pieceRequest = peerPieceRequestFromSelf peerState
+  let maybePieceRequests = hasAllPayloads =<< pieceRequest
+  case maybePieceRequests of
     Nothing ->
       return fsmState
-    Just pieceRequests -> do
-      case conformsToHash selfPM pieceRequests of
+    Just (pieceRequest, payloads) -> do
+      c <- conformsToHash selfPM pieceRequest payloads
+      case c of
         Just content -> do
-          let success = Succeeded (PieceResponse (preqIndex pieceRequests) content)
+          let success = Succeeded (PieceResponse (preqIndex pieceRequest) content)
           Chan.writeChan (responseChan fsmState) success
           let newPeer = peerState { peerPieceRequestFromSelf = Nothing }
           return $ fsmState { getPeer = newPeer}
         Nothing -> do
           -- DONE log and shed the broken state
-          myLog fsmState "ERROR: not $ isJust haveAllBlocks && isJust maybeWork"
+          myLog fsmState $ "ERROR: piece " <> (show $ preqIndex pieceRequest) <> " does does not conform to hash"
           sendWorkBackToManager fsmState
 
-conformsToHash :: PieceMap -> PieceRequest -> Maybe BS.ByteString
-conformsToHash pieceMap pieceRequests = do
-  let (expectedSha,_) = pieceMap !! (fromIntegral $ preqIndex pieceRequests)
-  let sortedBlockRequests = NonEmptyL.sortBy (\a b -> bBegin a `compare` bBegin b) (preqBlockRequests pieceRequests)
-  nonEmptyPayloadList <- traverse bPayload sortedBlockRequests
-  let combinedPayload = BS.concat $ NonEmptyL.toList nonEmptyPayloadList
+hasAllPayloads :: PieceRequest -> Maybe (PieceRequest, NonEmptyL.NonEmpty BS.ByteString)
+hasAllPayloads pieceRequests = do
+  list <- traverse bPayload (preqBlockRequests pieceRequests)
+  return (pieceRequests, list)
+
+conformsToHash :: PieceMap -> PieceRequest -> NonEmptyL.NonEmpty BS.ByteString -> IO (Maybe BS.ByteString)
+conformsToHash pieceMap pieceRequest payloads = do
+--  let sortedBlockRequests = NonEmptyL.sortBy (\a b -> bBegin a `compare` bBegin b) (preqBlockRequests pieceRequests)
+--  let maybeNonEmptyPayloadList = traverse (\br -> (\p -> (bBegin br, p)) <$> bPayload br ) sortedBlockRequests
+  let combinedPayload = BS.concat $ (NonEmptyL.toList payloads)
+  let (expectedSha, _) = pieceMap !! (fromIntegral $ preqIndex pieceRequest)
   if expectedSha == shaHashRaw combinedPayload then
-     Just combinedPayload
-   else
-     Nothing
+    return $ Just combinedPayload
+  else do
+    putStrLn $ "Expected sha: " <> (UTF8.toString expectedSha) <> " shaHashRaw " <> (UTF8.toString $ shaHashRaw combinedPayload) <> " " <> (show payloads)
+    return $ Nothing
 
 initPieceMap :: Tracker -> PieceMap
 initPieceMap t = (, False) <$> tPieceHashes t

@@ -123,8 +123,10 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
         return (peers, pieceMap, newCo)
     (Failed f) -> do
       print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
+      let index = preqIndex f
+      let newCo = M.delete index checkouts
       Chan.writeChan workChan f
-      return (peers, pieceMap, checkouts)
+      return (peers, pieceMap, newCo)
     CheckWork -> do
         time <- Clock.getTime Clock.Monotonic
 -- If it has been more than 5 seconds since a heartbeat, assume the thread is dead and recreate the work.

@@ -1,11 +1,10 @@
-# htorrent
+# HTorrent
 [![made at Recurse Center](https://cdn.rawgit.com/heatherbooker/made_at_rc/master/made_at_RC.svg)](https://www.recurse.com)
 
 HTorrent is a work-in-progress BitTorrent client written in Haskell. This was built as a learning exercise. It is not intended for use in production.
 
 ## Installation:
 NOTE: HTorrent uses pwrite & pread under the hood to allow for parallel reads of tracker content. For this reason, only POSIX system are supported (sorry windows).
-
 
 ### Binary Install (Mac)
 1. Run `wget https://github.com/nicksanford/htorrent/raw/master/release_builds/osx/htorrent && chmod +x ./htorrent`

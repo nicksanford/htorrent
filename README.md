@@ -40,10 +40,8 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - [x] Reading single torrent
 - [x] Tracks if peer is choking and does not request pieces if peer is choking
 - [x] Tracks which pieces each peer has by parsing have & bitfield messages.
-- [x] Support for large single files (currently hits an out of memory error when trying to download 10 GB file)
-- [x] Refactor FSM logic, which is the same regardless of whether connection is initiated by peer or HTorrent, out of Peer module & into an FSM module. During this step, also refactor out any test code outside of the test directory.
+- [x] Support for large single files
 - [x] Signal handling for Ctrl-C & clean shutdown
-- [x] Proper CLI with user feedback, currently just gets trackerfile path & TCP port for TCP server and exits if they are not provided.
 
 ### TODO (next to be implemented):
 - Refactor Parser module to use attoparsec as profiling discovered explicit fold / unfold parser to be the current bottleneck

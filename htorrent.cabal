@@ -50,6 +50,10 @@ library
                      , unix-bytestring
                      , utf8-string
                      , word8
+                     , wai >= 3.2.1.2
+                     , warp
+                     , websockets
+                     , http-types 
   default-language:    Haskell2010
 
 executable htorrent

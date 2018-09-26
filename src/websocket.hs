@@ -8,6 +8,7 @@
 -- keep the [reference](/reference/) nearby to check out the functions we use.
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Main  where
 import Data.Char (isPunctuation, isSpace)
 import Data.Monoid (mappend)
@@ -21,6 +22,12 @@ import qualified Data.Text.IO as T
 import qualified Network.WebSockets as WS
 import Data.UUID.V4 (nextRandom)
 import Data.UUID (UUID)
+
+import qualified Network.Wai (Application)
+import qualified Network.Wai.Handler.Warp as Warp
+import qualified Network.Wai.Handler.WebSockets as WaiWS
+import qualified Network.Wai.Application.Static as Static
+import Data.FileEmbed (embedDir)
 
 type Client = (UUID, WS.Connection)
 
@@ -61,15 +68,20 @@ application state chan pending = do
   where disconnect client =
           modifyMVar_ state $ \s -> return $ removeClient client s
 
+staticApp :: Network.Wai.Application
+staticApp = Static.staticApp $ Static.embeddedSettings $(embedDir "web")
+
 start :: IO ()
 start = do
     state <- newMVar newServerState
     chan <- newChan
-    _ <- forkIO $ WS.runServer "127.0.0.1" 9160 $ application state chan
+    _<- forkIO $ Warp.runSettings (Warp.setPort 9160 Warp.defaultSettings)
+                                  (WaiWS.websocketsOr WS.defaultConnectionOptions (application state chan) staticApp)
     forever $ T.getLine >>= writeChan chan
 
     -- get keyboard input
     -- write to chan
     -- call broadcast
     -- we can also experiment with the dup chan method
+    -- 
 main = start

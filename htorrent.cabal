@@ -32,13 +32,16 @@ library
                      , binary
                      , bitwise
                      , bytestring
+                     , case-insensitive
                      , clock
                      , containers
                      , cryptonite
                      , deepseq
                      , directory
+                     , file-embed
                      , filepath
                      , http-conduit
+                     , http-types 
                      , memory
                      , network
                      , optparse-applicative
@@ -49,12 +52,13 @@ library
                      , unix
                      , unix-bytestring
                      , utf8-string
-                     , word8
+                     , uuid
                      , wai >= 3.2.1.2
+                     , wai-app-static
+                     , wai-websockets
                      , warp
                      , websockets
-                     , http-types 
-                     , uuid
+                     , word8
   default-language:    Haskell2010
 
 executable htorrent

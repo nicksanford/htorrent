@@ -1,11 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
-module Main where
+module WebSocket (start) where
 import Data.Text (Text)
 import Control.Monad (forever)
-import Control.Concurrent (forkIO)
-import Control.Concurrent.Chan (Chan, readChan, writeChan, dupChan, newChan)
-import qualified Data.Text.IO as T
+import Control.Concurrent.Chan (Chan, readChan, dupChan)
 
 import qualified Network.WebSockets as WS
 
@@ -15,8 +13,6 @@ import qualified Network.Wai.Handler.WebSockets as WaiWS
 import qualified Network.Wai.Application.Static as Static
 import Data.FileEmbed (embedDir)
 
--- For htorrent I need to be able to have all peers have a channel which will receive every single have message which is received by the manager thread.
--- I need to have every thread (both manager and otherwise) be able to send messages to the websocket thread to broadcast messages to all connected clients.
 application ::  Chan Text -> WS.ServerApp
 application chan pending = do
     broadcastChan <- dupChan chan
@@ -24,24 +20,16 @@ application chan pending = do
     conn <- WS.acceptRequest pending
     WS.forkPingThread conn 30
 
-    WS.sendTextData conn ("HELLO! U just connected... waiting for keyboard input" :: Text)
+    --  TODO: Keep track of every message which has been sent and send those messages to newly connected clients
     forever $ do
       msg <- readChan broadcastChan
       WS.sendTextData conn msg
-
 
 staticApp :: Network.Wai.Application
 staticApp = Static.staticApp $ Static.embeddedSettings $(embedDir "web")
 
 start :: Int -> Chan Text -> IO ()
 start port chan = do
-    _<- forkIO $ Warp.runSettings (Warp.setPort port Warp.defaultSettings)
-                                  (WaiWS.websocketsOr WS.defaultConnectionOptions (application chan) staticApp)
-    forever $ T.getLine >>= writeChan chan
-
-    -- get keyboard input
-    -- write to chan
-    -- call broadcast
-    -- we can also experiment with the dup chan method
-    -- 
-main = newChan >>= start 9160
+    putStrLn $ "Visualization may be seen on http://localhost:" <> show port <> "/"
+    Warp.runSettings (Warp.setPort port Warp.defaultSettings)
+                     (WaiWS.websocketsOr WS.defaultConnectionOptions (application chan) staticApp)

@@ -8,30 +8,26 @@
 -- keep the [reference](/reference/) nearby to check out the functions we use.
 
 {-# LANGUAGE OverloadedStrings #-}
-module Websocket  where
+module Main  where
 import Data.Char (isPunctuation, isSpace)
 import Data.Monoid (mappend)
-import Data.Text (Text)
 import Control.Exception (finally)
+import Data.Text (Text)
 import Control.Monad (forM_, forever)
-import Control.Concurrent (MVar, newMVar, modifyMVar_, modifyMVar, readMVar)
-import qualified Data.Text as T
+import Control.Concurrent (MVar, newMVar, modifyMVar_, readMVar, forkIO)
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, dupChan)
 import qualified Data.Text.IO as T
 
 import qualified Network.WebSockets as WS
+import Data.UUID.V4 (nextRandom)
+import Data.UUID (UUID)
 
-type Client = (Text, WS.Connection)
+type Client = (UUID, WS.Connection)
 
 type ServerState = [Client]
 
 newServerState :: ServerState
 newServerState = []
-
-numClients :: ServerState -> Int
-numClients = length
-
-clientExists :: Client -> ServerState -> Bool
-clientExists client = any ((== fst client) . fst)
 
 addClient :: Client -> ServerState -> ServerState
 addClient client clients = client : clients
@@ -44,59 +40,36 @@ broadcast message clients = do
     T.putStrLn message
     forM_ clients $ \(_, conn) -> WS.sendTextData conn message
 
-talk :: Client -> MVar ServerState -> IO ()
-talk (user, conn) state = forever $ do
-    msg <- WS.receiveData conn
-    readMVar state >>= broadcast
-        (user `mappend` ": " `mappend` msg)
+application :: MVar ServerState -> Chan Text -> WS.ServerApp
+-- For htorrent I need to be able to have all peers have a channel which will receive every single have message which is received by the manager thread.
+-- I need to have every thread (both manager and otherwise) be able to send messages to the websocket thread to broadcast messages to all connected clients.
+application state chan pending = do
+    broadcastChan <- dupChan chan
 
-application :: MVar ServerState -> WS.ServerApp
-application state pending = do
     conn <- WS.acceptRequest pending
     WS.forkPingThread conn 30
-  -- For htorrent I need to be able to have all peers have a channel which will receive every single have message which is received by the manager thread.
-  -- I need to have every thread (both manager and otherwise) be able to send messages to the websocket thread to broadcast messages to all connected clients.
 
-    msg <- WS.receiveData conn
-    clients <- readMVar state
-    case msg of
+    uuid <- nextRandom
 
-        _   | not (prefix `T.isPrefixOf` msg) ->
-                WS.sendTextData conn ("Wrong announcement" :: Text)
+    flip finally (disconnect (uuid, conn)) $ do
+      modifyMVar_ state $ \x -> return $ addClient (uuid, conn) x
+      WS.sendTextData conn ("HELLO! U just connected... waiting for keyboard input" :: Text)
+      forever $ do
+        msg <- readChan broadcastChan
+        WS.sendTextData conn msg
 
-
-            | any ($ fst client)
-                [T.null, T.any isPunctuation, T.any isSpace] ->
-                    WS.sendTextData conn ("Name cannot " `mappend`
-                        "contain punctuation or whitespace, and " `mappend`
-                        "cannot be empty" :: Text)
-
-
-            | clientExists client clients ->
-                WS.sendTextData conn ("User already exists" :: Text)
-
-
-            | otherwise -> flip finally disconnect $ do
-
-
-               modifyMVar_ state $ \s -> do
-                   let s' = addClient client s
-                   WS.sendTextData conn $
-                       "Welcome! Users: " `mappend`
-                       T.intercalate ", " (map fst s)
-                   broadcast (fst client `mappend` " joined") s'
-                   return s'
-               talk client state
-          where
-            prefix     = "Hi! I am "
-            client     = (T.drop (T.length prefix) msg, conn)
-            disconnect = do
-                -- Remove client and return new state
-                s <- modifyMVar state $ \s ->
-                    let s' = removeClient client s in return (s', s')
-                broadcast (fst client `mappend` " disconnected") s
+  where disconnect client =
+          modifyMVar_ state $ \s -> return $ removeClient client s
 
 start :: IO ()
 start = do
     state <- newMVar newServerState
-    WS.runServer "127.0.0.1" 9160 $ application state
+    chan <- newChan
+    _ <- forkIO $ WS.runServer "127.0.0.1" 9160 $ application state chan
+    forever $ T.getLine >>= writeChan chan
+
+    -- get keyboard input
+    -- write to chan
+    -- call broadcast
+    -- we can also experiment with the dup chan method
+main = start

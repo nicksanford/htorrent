@@ -54,6 +54,7 @@ library
                      , warp
                      , websockets
                      , http-types 
+                     , uuid
   default-language:    Haskell2010
 
 executable htorrent

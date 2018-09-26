@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module WebStatic where
+module Main  where
 
 import Network.Wai
 import Network.HTTP.Types
@@ -30,3 +30,5 @@ app request respond = respond $ case rawPathInfo request of
 
 start :: Int -> IO ()
 start port = run port app
+
+main = start 8000

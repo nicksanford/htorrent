@@ -1,22 +1,11 @@
-
--- websockets example
--- ==================
-
--- This is the Haskell implementation of the example for the WebSockets library. We
--- implement a simple multi-user chat program. A live demo of the example is
--- available [here](/example/client.html).  In order to understand this example,
--- keep the [reference](/reference/) nearby to check out the functions we use.
-
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
-module Main  where
-import Data.Char (isPunctuation, isSpace)
-import Data.Monoid (mappend)
+module WebSocket (start) where
 import Control.Exception (finally)
 import Data.Text (Text)
 import Control.Monad (forM_, forever)
-import Control.Concurrent (MVar, newMVar, modifyMVar_, readMVar, forkIO)
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, dupChan)
+import Control.Concurrent (MVar, newMVar, modifyMVar_, forkIO)
+import Control.Concurrent.Chan (Chan, readChan, writeChan, dupChan)
 import qualified Data.Text.IO as T
 
 import qualified Network.WebSockets as WS
@@ -47,9 +36,9 @@ broadcast message clients = do
     T.putStrLn message
     forM_ clients $ \(_, conn) -> WS.sendTextData conn message
 
-application :: MVar ServerState -> Chan Text -> WS.ServerApp
 -- For htorrent I need to be able to have all peers have a channel which will receive every single have message which is received by the manager thread.
 -- I need to have every thread (both manager and otherwise) be able to send messages to the websocket thread to broadcast messages to all connected clients.
+application :: MVar ServerState -> Chan Text -> WS.ServerApp
 application state chan pending = do
     broadcastChan <- dupChan chan
 
@@ -71,11 +60,10 @@ application state chan pending = do
 staticApp :: Network.Wai.Application
 staticApp = Static.staticApp $ Static.embeddedSettings $(embedDir "web")
 
-start :: IO ()
-start = do
+start :: Int -> Chan Text -> IO ()
+start port chan = do
     state <- newMVar newServerState
-    chan <- newChan
-    _<- forkIO $ Warp.runSettings (Warp.setPort 9160 Warp.defaultSettings)
+    _<- forkIO $ Warp.runSettings (Warp.setPort port Warp.defaultSettings)
                                   (WaiWS.websocketsOr WS.defaultConnectionOptions (application state chan) staticApp)
     forever $ T.getLine >>= writeChan chan
 
@@ -84,4 +72,3 @@ start = do
     -- call broadcast
     -- we can also experiment with the dup chan method
     -- 
-main = start

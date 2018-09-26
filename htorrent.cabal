@@ -26,6 +26,7 @@ library
                      , FSM
                      , Parser
                      , RPCMessages
+                     , WebSocket
   build-depends:       base >= 4.7 && < 5
                      , attoparsec
                      , base16-bytestring

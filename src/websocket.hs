@@ -13,6 +13,20 @@ import qualified Network.Wai.Handler.WebSockets as WaiWS
 import qualified Network.Wai.Application.Static as Static
 import Data.FileEmbed (embedDir)
 
+-- v1
+-- Render description of the torrent - probably a piece map
+-- Provide updates as the piece map is updated i.e new pieces are downloaded
+-- Show percentage done - derive this client side
+
+-- v2
+-- Show clients I am connected to and their state
+-- Show checked out pieces and which clients are working on them
+-- Show when piece requests fail
+
+-- v3
+-- Show blocks + pieces
+-- Be able to render when pieces need to get dropped b/c one or more of the blocks were invalid
+
 application ::  Chan Text -> WS.ServerApp
 application chan pending = do
     broadcastChan <- dupChan chan

@@ -38,20 +38,30 @@ optParser = Opt <$> strOption (  long "tracker"
                               <> metavar "TRACKER_FILE"
                               <> help "Path to the tracker file"
                               )
+
                 <*> switch (  long "debug"
                            <> short 'd'
                            <> help "Enables debug information to stdout"
                            )
+
                 <*> option auto (  long "port"
                                 <> help "The port to have the TCP server listen on"
                                 <> showDefault
                                 <> value 8888
                                 <> metavar "PORT"
                                 )
+
                 <*> switch (  long "quit-on-complete"
                            <> short 'q'
                            <> help "Will quit HTorrent when torrent is complete"
                            )
+
+                -- TODO Remove the default option so that by default the web server does not start
+                <*> option auto (  long "web-port"
+                                  <> short 'w'
+                                  <> help "The port to bind the webserver to"
+                                  <> value (Just 9160)
+                                  )
 
 opts :: ParserInfo Opt
 opts = info (optParser <**> helper)

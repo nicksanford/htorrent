@@ -19,6 +19,7 @@ data Opt = Opt { tracker      :: String
                , debug        :: Bool
                , port         :: Integer
                , quitWhenDone :: Bool
+               , maybeWSPort :: Maybe Int
                } deriving (Eq)
 
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.

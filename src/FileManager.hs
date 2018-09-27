@@ -103,6 +103,10 @@ handleResponseMsg fileManagerState response = case response of
       let index = presIndex pr
       let newCo = M.delete index checkouts
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
+      maybe (return ()) (\wsChan -> do
+                            Chan.writeChan wsChan  $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ index
+                            putStrLn $ "Wrote to WS chan" <> show index
+                        ) (fmMaybeWSChan fileManagerState)
       return $ fileManagerState {fmPieceMap = newPM, fmCheckouts = newCo}
 
     (Error p) -> do
@@ -260,8 +264,8 @@ start tracker opt killChan = do
   let filteredWorkToBeDone = fst <$> filter (not . snd . snd) (zip workToBeDone pieceMap)
   Chan.writeList2Chan workC filteredWorkToBeDone
   maybe (return ()) (\wsPort -> do
-                        Chan.writeChan wsC $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode pieceMap
                         void $ forkIO $ WebSocket.start wsPort wsC
+                        Chan.writeChan wsC $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ snd <$> pieceMap
                     ) maybeWSP
   loop $ FileManagerState opt tracker workC responseC maybeWSC killChan peers pieceMap M.empty filteredWorkToBeDone
 

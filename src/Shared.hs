@@ -33,7 +33,7 @@ data BlockRequest = BlockRequest { bIndex     :: Integer
 
 data PieceRequest = PieceRequest { preqIndex :: Integer
                                  , preqBlockRequests :: NonEmptyL.NonEmpty BlockRequest
-                                 } deriving (Eq, Show)
+                                 } deriving (Eq, Show, Generic)
 
 data PieceResponse = PieceResponse { presIndex    :: Integer
                                    , piecePayload :: BS.ByteString
@@ -51,7 +51,7 @@ data ResponseMessage = Failed PieceRequest
                      | CheckOut PeerThreadId PieceIndex Clock.TimeSpec
                      | CheckPeers
                      | CheckWork
-                     deriving (Eq, Show)
+                     deriving (Eq, Show, Generic)
 
 
 data FSMState = FSMState { fsmId        :: BS.ByteString
@@ -73,7 +73,7 @@ data Initiator = SelfInitiated
 
 data Peer = Peer { pIP   :: BS.ByteString
                  , pPort :: Integer
-                 } deriving (Eq, Show)
+                 } deriving (Eq, Show, Generic)
 
 data PeerResponse = PeerResponse { prInfoHash :: BS.ByteString
                                  , prPeerId   :: BS.ByteString
@@ -106,7 +106,7 @@ data PeerState = PeerState { peerId                   :: BS.ByteString
                            , lastHeartBeat            :: Maybe Clock.TimeSpec
                            , lastKeepAlive            :: Clock.TimeSpec
                            }
-              deriving (Eq)
+              deriving (Eq, Generic)
 
 instance Show PeerState where
   show a = "PeerState { " <> "peerId = " <> UTF8.toString (peerId a) <> ", "
@@ -144,7 +144,7 @@ instance Show SelfState where
 data SingleFileInfo = SingleFileInfo { sfName        :: BS.ByteString
                                      , sfLength      :: Integer
                                      , sfMaybeMD5Sum :: Maybe BS.ByteString
-                                     } deriving (Eq, Show)
+                                     } deriving (Eq, Show, Generic)
 
 data DirectoryInfo = DirectoryInfo { diName  :: BS.ByteString
                                    , diFiles :: [SingleFileInfo]
@@ -160,7 +160,7 @@ data Tracker = Tracker { tPeerId             :: BS.ByteString
                        , tSingleFileInfo     :: SingleFileInfo
                        , tMaybeDirectoryInfo :: Maybe DirectoryInfo
                        , tMaybeEncoding      :: Maybe BS.ByteString
-                       } deriving (Eq, Show)
+                       } deriving (Eq, Show, Generic)
 
 data TrackerResponse = TrackerResponse { trPeers            :: [Peer]
                                        , trInterval         :: Integer

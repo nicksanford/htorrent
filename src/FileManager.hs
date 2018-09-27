@@ -3,6 +3,9 @@
 {-# LANGUAGE TupleSections     #-}
 
 module FileManager where
+import qualified Data.Aeson as Aeson
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Lazy as LBS
 import           Prelude hiding (log)
 import           Control.Concurrent                           ( ThreadId
                                                               , forkFinally
@@ -18,7 +21,7 @@ import           Control.Monad                                ( when
 import qualified Data.ByteString                              as BS
 import qualified Data.ByteString.Lazy                         as LBS
 import qualified Data.ByteString.UTF8                         as UTF8
-import Data.Text (Text)
+import Data.Text (Text, pack, unpack)
 import qualified Data.List                                    as L
 import qualified Data.List.NonEmpty                           as NonEmptyL
 import qualified Data.Map                                     as M
@@ -240,7 +243,6 @@ start tracker opt killChan = do
   let maybeWSC = const wsC <$> maybeWSP
 
   _ <- forkIO $ Server.start opt tracker workC responseC broadcastC pieceMap
-  maybe (return ()) (\wsPort -> void $ forkIO $ WebSocket.start wsPort wsC) maybeWSP
 
   maybeTrackerResponse <- trackerRequest tracker opt (downloadedSoFar tracker pieceMap)
   when (isNothing maybeTrackerResponse) $
@@ -257,6 +259,10 @@ start tracker opt killChan = do
       workToBeDone = getPieceList tracker
   let filteredWorkToBeDone = fst <$> filter (not . snd . snd) (zip workToBeDone pieceMap)
   Chan.writeList2Chan workC filteredWorkToBeDone
+  maybe (return ()) (\wsPort -> do
+                        Chan.writeChan wsC $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode pieceMap
+                        void $ forkIO $ WebSocket.start wsPort wsC
+                    ) maybeWSP
   loop $ FileManagerState opt tracker workC responseC maybeWSC killChan peers pieceMap M.empty filteredWorkToBeDone
 
 checkoutTimer :: Chan.Chan ResponseMessage -> IO ()

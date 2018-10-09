@@ -76,6 +76,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
   when (newlastKeepAlive == now) $ sendAll conn keepAlive
 
   msg <- recv conn 16384
+  BS.appendFile (UTF8.toString $ "./vcr/" <> fsmId fsmState) msg
 
 --  fsmLog  fsmState $ " msg: " <> (show $ BS.unpack msg)
   let newPeerRPCParse = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState

@@ -52,7 +52,7 @@ start port chan = do
     putStrLn $ "Visualization may be seen on http://localhost:" <> show port <> "/"
     mvar <- newMVar Seq.empty
     writeC <- newChan
-    -- Adds the new message to the MVar for new clients before proxying it to the channel the application dups and reads from
+    -- Adds the new message to the MVar for new clients before prox
     _ <- forkIO $ forever $ do
         msg <- readChan chan
         modifyMVar_ mvar (\x -> return $ x Seq.|> msg)

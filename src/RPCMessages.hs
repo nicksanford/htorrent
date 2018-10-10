@@ -29,7 +29,7 @@ have :: BS.ByteString -> BS.ByteString
 have pieceIndex = BS.concat [BS.pack [0,0,0,5,4], pieceIndex]
 
 request :: Integer -> Integer -> Integer -> BS.ByteString
-request index begin len =  BS.pack  $ [0,0,0,13,6] <> ([index, begin, len] >>= (integerToBigEndian . fromIntegral))
+request index begin len =  BS.pack  $ [0,0,0,13,6] <> ([index, begin, len] >>= (BS.unpack . integerToBigEndian . fromIntegral))
 
 handshake :: BS.ByteString -> BS.ByteString -> BS.ByteString
 handshake info_hash peer_id =  BS.concat [pstrlen, pstr, reserved, unhex info_hash, peer_id]

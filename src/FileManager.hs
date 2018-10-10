@@ -103,10 +103,7 @@ handleResponseMsg fileManagerState response = case response of
       let index = presIndex pr
       let newCo = M.delete index checkouts
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
-      maybe (return ()) (\wsChan -> do
-                            Chan.writeChan wsChan  $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ index
-                            putStrLn $ "Wrote to WS chan" <> show index
-                        ) (fmMaybeWSChan fileManagerState)
+      maybe (return ()) (\wsChan -> Chan.writeChan wsChan $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ index) $ fmMaybeWSChan fileManagerState
       return $ fileManagerState {fmPieceMap = newPM, fmCheckouts = newCo}
 
     (Error p) -> do

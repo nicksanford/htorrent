@@ -78,12 +78,10 @@ nanoSectoSec = flip div 1000000000
 showPeerId :: BS.ByteString -> String
 showPeerId = UTF8.toString . B16.encode
 
-bigEndianToInteger :: [Binary.Word8] -> Maybe Binary.Word32
-bigEndianToInteger xs =
-  if length xs == 4 then
-    Just $ Binary.decode $ LBS.fromStrict $ BS.pack xs
-  else
-    Nothing
+bigEndianToInteger :: BS.ByteString -> Maybe Binary.Word32
+bigEndianToInteger xs
+  | BS.length xs == 4 = Just $ Binary.decode $ LBS.fromStrict xs
+  | otherwise         = Nothing
 
-integerToBigEndian :: Binary.Word32 -> [W.Word8]
-integerToBigEndian = BS.unpack . LBS.toStrict . Binary.encode
+integerToBigEndian :: Binary.Word32 -> BS.ByteString
+integerToBigEndian = LBS.toStrict . Binary.encode

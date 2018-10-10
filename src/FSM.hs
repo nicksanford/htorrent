@@ -301,9 +301,9 @@ sendPieces fsmState = do --(FSMState a (Conn conn) c d (RPCParse (PeerRPCParse b
 
 blockResponseToBS :: BlockResponse -> BS.ByteString
 blockResponseToBS (BlockResponse index begin content) =
-  (BS.pack ((integerToBigEndian $ (fromIntegral $ BS.length content) + 9) <>
+  (BS.pack ((BS.unpack $ integerToBigEndian $ (fromIntegral $ BS.length content) + 9) <>
   [7] <>
-  (integerToBigEndian $ fromIntegral index) <> (integerToBigEndian $ fromIntegral begin)))
+  (BS.unpack $ integerToBigEndian $ fromIntegral index) <> (BS.unpack $ integerToBigEndian $ fromIntegral begin)))
   <> content
 
 newKeepAlive :: Clock.TimeSpec -> Clock.TimeSpec -> Clock.TimeSpec
@@ -357,7 +357,7 @@ pieceMapToBitField pieceMap = do
   let x = fmap (\(a:b:c:d:e:f:g:h:[]) -> Bitwise.packWord8BE a b c d e f g h) chunks
   let bitfield :: BS.ByteString
       bitfield = BS.pack x
-      len = integerToBigEndian $ fromIntegral $ BS.length bitfield + 1
+      len = BS.unpack $ integerToBigEndian $ fromIntegral $ BS.length bitfield + 1
   BS.pack (len <> [5]) <> bitfield
 
 peerRPCToPiece :: PeerRPC -> Maybe BlockResponse

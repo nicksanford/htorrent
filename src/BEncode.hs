@@ -7,6 +7,7 @@ import           Data.List            (sortOn, unfoldr)
 import qualified Data.Map             as M
 import           Data.Maybe           (fromJust, fromMaybe, isNothing)
 import qualified Data.Word8           as W
+import Data.Attoparsec.ByteString
 
 data BEncode = BInteger Integer
              | BString BS.ByteString

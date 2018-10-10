@@ -1,7 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Parser ( defaultPeerRPCParse
-              , parseRPC)
-where
+module Parser where
 
 import qualified Data.Bits       as Bits
 import qualified Data.ByteString as BS
@@ -10,6 +8,8 @@ import           Data.Maybe      (fromJust)
 import qualified Data.Sequence   as Seq
 import qualified Data.Word8      as W
 import           Prelude         hiding (length)
+import qualified Data.Attoparsec.ByteString as P
+import Control.Applicative
 
 import           Shared
 import           Utils
@@ -17,9 +17,69 @@ import           Utils
 defaultPeerRPCParse :: PeerRPCParse
 defaultPeerRPCParse = PeerRPCParse Seq.empty Nothing []
 
+
 parseRPC :: PieceMap -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
 parseRPC pieceMap bs peerRPCParse =
   BS.foldl (parseRPC' pieceMap) peerRPCParse bs
+
+keepAliveBS :: BS.ByteString
+keepAliveBS = BS.pack [0,0,0,0]
+
+chokeBS :: BS.ByteString
+chokeBS = BS.pack [0,0,0,1,0]
+
+unChokeBS :: BS.ByteString
+unChokeBS = BS.pack [0,0,0,1,1]
+
+interestedBS :: BS.ByteString
+interestedBS = BS.pack [0,0,0,1,2]
+
+notInterestedBS :: BS.ByteString
+notInterestedBS = BS.pack [0,0,0,1,3]
+
+haveBS :: BS.ByteString
+haveBS = BS.pack [0,0,0,5,4]
+
+cancelBS :: BS.ByteString
+cancelBS = BS.pack [0,0,0,13,8]
+
+keepAliveParser :: P.Parser PeerRPC
+keepAliveParser = P.string keepAliveBS >> return PeerKeepAlive
+
+chokeParser :: P.Parser PeerRPC
+chokeParser = P.string chokeBS >> return Choke
+
+unChokeParser :: P.Parser PeerRPC
+unChokeParser = P.string unChokeBS >> return UnChoke
+
+interestedParser :: P.Parser PeerRPC
+interestedParser = P.string interestedBS >> return Interested
+
+notInterestedParser :: P.Parser PeerRPC
+notInterestedParser = P.string notInterestedBS >> return NotInterested 
+
+haveParser :: P.Parser PeerRPC
+haveParser = P.string haveBS >> Have <$> P.take 9
+
+cancelParser :: P.Parser PeerRPC
+cancelParser = let f = (do
+                        a <- P.take 4
+                        b <- P.take 4
+                        c <- P.take 4
+                        return $ Cancel (fromIntegral $ fromJust $ bigEndianToInteger a)
+                                        (fromIntegral $ fromJust $ bigEndianToInteger b)
+                                        (fromIntegral $ fromJust $ bigEndianToInteger c)
+                       )
+               in P.string cancelBS >> f
+
+rpcParser :: P.Parser PeerRPC
+rpcParser =     keepAliveParser
+            <|> chokeParser
+            <|> unChokeParser
+            <|> interestedParser
+            <|> notInterestedParser
+            <|> haveParser
+            <|> cancelParser
 
 parseRPC' :: PieceMap -> PeerRPCParse -> W.Word8 -> PeerRPCParse
 parseRPC' pieceMap (PeerRPCParse word8Buffer Nothing xs) word8
@@ -35,7 +95,7 @@ parseRPC' pieceMap (PeerRPCParse word8Buffer Nothing xs) word8
     else
       PeerRPCParse newBuffer Nothing xs
   | Seq.drop 4 (Seq.take 5 newBuffer) == Seq.singleton 5  = do
-    let bitfieldLength = fromIntegral (fromJust $ bigEndianToInteger $ toList $ Seq.take 4 newBuffer) - 1
+    let bitfieldLength = fromIntegral (fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 newBuffer) - 1
     let word8s = Seq.take bitfieldLength $ Seq.drop 5 newBuffer
 
     if ceiling ((fromIntegral . length $ pieceMap) / 8 :: Double) /= bitfieldLength then
@@ -56,9 +116,9 @@ parseRPC' pieceMap (PeerRPCParse word8Buffer Nothing xs) word8
           in PeerRPCParse (Seq.drop (bitfieldLength + 5) newBuffer) Nothing (xs <> bitFieldMsg)
   | Seq.take 5 newBuffer == Seq.fromList [0,0,0,13,6] =
         if length newBuffer >= 17 then
-          let requestMsg = [Request $ BlockRequest (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer)
-                                                   (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 9 newBuffer)
-                                                   (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 13 newBuffer)
+          let requestMsg = [Request $ BlockRequest (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer)
+                                                   (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 9 newBuffer)
+                                                   (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 13 newBuffer)
                                                    PeerInitiated
                                                    0
                                                    Nothing]
@@ -66,7 +126,7 @@ parseRPC' pieceMap (PeerRPCParse word8Buffer Nothing xs) word8
         else
           PeerRPCParse newBuffer Nothing xs
   | Seq.drop 4 (Seq.take 5 newBuffer) == Seq.singleton 7 = do
-    let blockLen = fromIntegral $ fromJust (bigEndianToInteger $ toList $ Seq.take 4 newBuffer) - 9
+    let blockLen = fromIntegral $ fromJust (bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 newBuffer) - 9
     let blockWord8s = Seq.take blockLen $ Seq.drop 13 newBuffer
     let indexWord8s = Seq.take 4 $ Seq.drop 5 newBuffer
     let beginWord8s = Seq.take 4 $ Seq.drop 9 newBuffer
@@ -75,17 +135,17 @@ parseRPC' pieceMap (PeerRPCParse word8Buffer Nothing xs) word8
       PeerRPCParse newBuffer Nothing xs
     else
 -- TODO refactor this with fmap
-      let index = fromIntegral $ fromJust $ bigEndianToInteger $ toList indexWord8s
-          begin = fromIntegral $ fromJust $ bigEndianToInteger $ toList beginWord8s
+      let index = fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList indexWord8s
+          begin = fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList beginWord8s
           block = BS.pack $ toList blockWord8s
           responseMsg = [Response $ BlockResponse index begin block]
       in PeerRPCParse (Seq.drop (5 + 4 + 4 + blockLen) newBuffer) Nothing (xs <> responseMsg)
   | Seq.take 5 newBuffer == Seq.fromList [0,0,0,13,8] =
     if length newBuffer >= 17 then
 -- TODO refactor this with fmap
-        let cancelMsg = [Cancel (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer)
-                                (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 9 newBuffer)
-                                (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 13 newBuffer)]
+        let cancelMsg = [Cancel (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer)
+                                (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 9 newBuffer)
+                                (fromIntegral $ fromJust $ bigEndianToInteger $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 13 newBuffer)]
         in PeerRPCParse Seq.empty Nothing (xs <> cancelMsg)
     else
         PeerRPCParse newBuffer Nothing xs

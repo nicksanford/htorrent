@@ -168,10 +168,10 @@ main = hspec $ do
       pieces <- (FSM.fetchBlockResponses pieceLength sfi (Shared.Request <$> blockRequests))
       (BS.concat $ Shared.pBlock <$> pieces) `shouldBe` (LBS.toStrict fileContents)
       let piecesBS = BS.concat $ FSM.blockResponseToBS <$> pieces
-      let (Shared.PeerRPCParse buffer Nothing parsedBlockResponses) = Parser.parseRPC ((,False) . fst <$> pieceMap) piecesBS Parser.defaultPeerRPCParse
-      buffer `shouldBe` Seq.empty
-      length parsedBlockResponses `shouldBe` length pieces
-      ((\(Shared.Response r) -> r) <$> parsedBlockResponses) `shouldBe` pieces
+      let Right (unparsed, parsed) = Parser.rpcParse "" piecesBS
+      unparsed `shouldBe` ""
+      length parsed `shouldBe` length pieces
+      ((\(Shared.Response r) -> r) <$> parsed) `shouldBe` pieces
 
   describe "decode" $ do
     describe "charsToMaybeInt_prop" $ do

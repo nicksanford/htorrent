@@ -1,20 +1,14 @@
-{-# LANGUAGE OverloadedStrings #-}
 module Parser where
 
-import qualified Data.Bits       as Bits
-import qualified Data.ByteString as BS
-import           Data.Foldable   (length, toList)
-import qualified Data.Sequence   as Seq
-import qualified Data.Word8      as W
-import           Prelude         hiding (length)
+import           Control.Applicative
 import qualified Data.Attoparsec.ByteString as P
-import Control.Applicative
+import qualified Data.Bits                  as Bits
+import qualified Data.ByteString            as BS
+import           Data.Foldable              (toList)
+import qualified Data.Sequence              as Seq
 
 import           Shared
 import           Utils
-
-defaultPeerRPCParse :: PeerRPCParse
-defaultPeerRPCParse = PeerRPCParse Seq.empty Nothing []
 
 keepAliveBS :: BS.ByteString
 keepAliveBS = BS.pack [0,0,0,0]

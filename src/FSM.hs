@@ -19,29 +19,27 @@ import qualified Data.ByteString.UTF8                         as UTF8
 import           Data.Foldable                                (find, foldl')
 import           Data.List                                    (sortOn)
 import qualified Data.List.NonEmpty                           as NonEmptyL
-import           Data.Maybe                                   (fromJust,
-                                                               fromMaybe,
+import           Data.Maybe                                   (fromMaybe,
                                                                isJust,
                                                                isNothing,
                                                                listToMaybe)
 import           Network.Socket                               hiding (recv)
-import           Network.Socket.ByteString                    (recv, send,
-                                                               sendAll)
+import           Network.Socket.ByteString                    (recv, sendAll)
 import           Parser                                       (rpcParse)
 import           RPCMessages                                  (keepAlive,
                                                                request)
 import           Shared
 import qualified System.Clock                                 as Clock
-import qualified System.Posix.Files.ByteString                as PosixFilesBS
 import qualified System.Posix.IO                              as PosixIO
 import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 import           System.Timeout                               (timeout)
 import           Utils
 
+requestLimit :: Int
 requestLimit = 10
 
 buildFSMState :: Opt -> Tracker -> BS.ByteString -> BS.ByteString -> Socket -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Clock.TimeSpec -> PieceMap -> Initiator -> FSMState
-buildFSMState opt t fsmStateId peerID conn workC responseC time pieceMap init =
+buildFSMState o t fsmStateId peerID conn workC responseC time pieceMap fsmInitiator =
   let selfState = SelfState { selfId                   = (tPeerId t)
                             , selfPieceMap             = pieceMap
                             , selfChokingPeer          = False
@@ -57,14 +55,13 @@ buildFSMState opt t fsmStateId peerID conn workC responseC time pieceMap init =
                             , lastHeartBeat            = Nothing
                             , lastKeepAlive            = time
                             }
-  in FSMState fsmStateId t conn peerState selfState workC responseC "" [] init opt
+  in FSMState fsmStateId t conn peerState selfState workC responseC "" [] fsmInitiator o
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
 recvLoop :: FSMState -> IO ()
 --recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) pieceMap) peerRPCParse workChan responseChan currentWork = do
 recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse peerRPCParse) _ _ _ _ (TimeStamps (_, (LastKeepAlive lastKeepAlive))) pieces) = do
   -- TODO If anything throws, catch it, put the work back in the response queue for the parent thread
-  let selfState = getSelf fsmState
   let peerState = getPeer fsmState
   let conn = getConn fsmState
   fsmLog fsmState $ "Blocked on recvLoop, peerState: " <> (show fsmState)
@@ -96,8 +93,8 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
       else do
         let eitherUpdatedFSMState = updateFsmState fsmState newRPCParse newlastKeepAlive
         case eitherUpdatedFSMState of
-          Left error -> do
-            fsmLog fsmState $ "ERROR: RECVLOOP updateFsmState " <> error
+          Left e -> do
+            fsmLog fsmState $ "ERROR: RECVLOOP updateFsmState " <> e
             _ <- sendWorkBackToManager fsmState
             return ()
           Right updatedFSMState ->
@@ -120,14 +117,13 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
               recvLoop finalPeerState
 
 maybeGetNewWork :: FSMState -> IO (Maybe PieceRequest)
-maybeGetNewWork fsmState = do
+maybeGetNewWork fsmState =
   if isNothing (peerPieceRequestFromSelf $ getPeer $ fsmState) then do
     fsmLog  fsmState "WORK IS EMPTY PULLING NEW WORK"
     loop 0
   else
     return Nothing
   where sPieceMap = selfPieceMap $ getSelf fsmState
-        oldpieceRequest = peerPieceRequestFromSelf $ getPeer fsmState
         maxNumberofPiecesLeft = length $ filter (not . snd) sPieceMap
 -- TODO - Change this to use getChannelContents
         loop :: Int -> IO (Maybe PieceRequest)
@@ -159,7 +155,7 @@ findBitField (BitField _) = True
 findBitField _            = False
 
 updateFsmState :: FSMState -> (BS.ByteString, [PeerRPC]) -> Clock.TimeSpec -> Either String FSMState
-updateFsmState fsmState (unparsed, parsed) newKeepAliveTime = do
+updateFsmState fsmState (unparsed, parsed) _newKeepAliveTime = do
   let peer = getPeer fsmState
   let oldPieceMap = peerPieceMap peer
   let bitfieldUpdatedPieceMap = maybe oldPieceMap
@@ -232,21 +228,21 @@ sendFinishedWorkBackToManager :: FSMState -> IO FSMState
 sendFinishedWorkBackToManager fsmState = do
   let peerState = getPeer fsmState
   let selfPM = selfPieceMap $ getSelf fsmState
-  let pieceRequest = peerPieceRequestFromSelf peerState
-  let maybePieceRequests = hasAllPayloads =<< pieceRequest
+  let peerPieceRequest = peerPieceRequestFromSelf peerState
+  let maybePieceRequests = hasAllPayloads =<< peerPieceRequest
   case maybePieceRequests of
     Nothing ->
       return fsmState
-    Just (pieceRequest, payloads) -> do
-      case conformsToHash selfPM pieceRequest payloads of
+    Just (validPeerPieceRequest, payloads) -> do
+      case conformsToHash selfPM validPeerPieceRequest payloads of
         Just content -> do
-          let success = Succeeded (PieceResponse (preqIndex pieceRequest) content)
+          let success = Succeeded (PieceResponse (preqIndex validPeerPieceRequest) content)
           Chan.writeChan (responseChan fsmState) success
           let newPeer = peerState { peerPieceRequestFromSelf = Nothing }
           return $ fsmState { getPeer = newPeer}
         Nothing -> do
           -- DONE log and shed the broken state
-          fsmLog  fsmState $ "ERROR: piece " <> (show $ preqIndex pieceRequest) <> " does does not conform to hash"
+          fsmLog  fsmState $ "ERROR: piece " <> (show $ preqIndex validPeerPieceRequest) <> " does does not conform to hash"
           sendWorkBackToManager fsmState
 
 hasAllPayloads :: PieceRequest -> Maybe (PieceRequest, NonEmptyL.NonEmpty BS.ByteString)
@@ -282,8 +278,8 @@ fetchBlockResponses pieceLen singleFileInfo rpcs = do
           return $ BlockResponse index begin readBS
 
 isRequest :: PeerRPC -> Bool
-isRequest (Request{}) = True
-isRequest _           = False
+isRequest Request{} = True
+isRequest _         = False
 
 buildPieces :: FSMState -> IO FSMState
 buildPieces fsmState = do -- @(FSMState fsmID singleFileInfo pieceLength conn peer self wc rc rpc work pieces lhb lka initiator) = do-- (PeerState a b c d (RPCParse (PeerRPCParse buffer err parsedRPCs)) f g h i j pieces) = do
@@ -344,7 +340,7 @@ sendRequests fsmState = do
                                              unworkedRequestsMinusNewRequestsToWork <>
                                              workingRequests <>
                                              completedRequests)
-      let newPieceRequest = pieceRequest { preqBlockRequests = NonEmptyL.fromList nextBlockRequests}
+      let newPieceRequest = pieceRequest { preqBlockRequests = NonEmptyL.fromList nextBlockRequests }
       return $ fsmState {getPeer = peer {peerPieceRequestFromSelf = Just newPieceRequest}}
   where
         f :: BlockRequest -> IO BlockRequest
@@ -365,10 +361,6 @@ pieceMapToBitField pieceMap = do
       len = BS.unpack $ integerToBigEndian $ fromIntegral $ BS.length bitfield + 1
   BS.pack (len <> [5]) <> bitfield
 
-peerRPCToPiece :: PeerRPC -> Maybe BlockResponse
-peerRPCToPiece (Response (br@BlockResponse{})) = Just br
-peerRPCToPiece _                               = Nothing
-
 mergeBitFieldIntoPieceMap :: PieceMap -> [Bool] -> PieceMap
 mergeBitFieldIntoPieceMap = zipWith (\(x,xbool) ybool -> (x, xbool || ybool))
 
@@ -377,7 +369,7 @@ peerHasData fSMState pieceRequest =
   (preqIndex pieceRequest) `elem` (piecesThatCanBeDone $ peerPieceMap $ getPeer fSMState)
 
 piecesThatCanBeDone :: PieceMap -> [Integer]
-piecesThatCanBeDone pieceMap = fmap fst $ filter (\(_, (k,v)) -> v) $ zip ([0..]) pieceMap
+piecesThatCanBeDone pieceMap = fmap fst $ filter (snd . snd) $ zip [0..] pieceMap
 
 -- https://wiki.haskell.org/Data.List.Split
 chunkWithDefault :: a -> Int -> [a] -> [[a]]

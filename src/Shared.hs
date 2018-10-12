@@ -9,8 +9,6 @@ import           Control.DeepSeq
 import qualified Data.ByteString         as BS
 import qualified Data.ByteString.UTF8    as UTF8
 import qualified Data.List.NonEmpty      as NonEmptyL
-import qualified Data.Sequence           as Seq
-import qualified Data.Word8              as W
 import           GHC.Generics            (Generic)
 import           Network.Socket
 import qualified System.Clock            as Clock
@@ -19,7 +17,7 @@ data Opt = Opt { tracker      :: String
                , debug        :: Bool
                , port         :: Integer
                , quitWhenDone :: Bool
-               , maybeWSPort :: Maybe Int
+               , maybeWSPort  :: Maybe Int
                } deriving (Eq)
 
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.
@@ -81,18 +79,13 @@ data PeerResponse = PeerResponse { prInfoHash :: BS.ByteString
                                  } deriving (Eq, Show, Generic, NFData)
 
 
-data PeerRPCParse = PeerRPCParse { pRPCUnparsed :: Seq.Seq W.Word8
-                                 , pRPCError    :: Maybe BS.ByteString
-                                 , pRPCParsed   :: [PeerRPC]
-                                 } deriving (Eq, Generic, NFData)
-
 data PeerRPC = PeerKeepAlive
              | Choke
              | UnChoke
              | Interested
              | NotInterested
              | Have Integer
-             | BitField [Bool] 
+             | BitField [Bool]
              | Cancel Integer Integer Integer
              | Request BlockRequest
              | Response BlockResponse
@@ -197,9 +190,6 @@ instance Show FSMState where
                    <> "initiator: "      <> (show $ initiator a)
                    <> "}"
 
-instance Show PeerRPCParse where
-  show (PeerRPCParse word8s m rpcs) = "PeerRPCParse : " <> (show $ Seq.length word8s) <> " " <> show m <> " " <> show rpcs
-
 blockSize :: Integer
 blockSize = (2::Integer)^(14::Integer) -- 16k
 
@@ -210,6 +200,6 @@ fsmLog fsmState msg
   | otherwise = return ()
 
 log :: Opt -> String -> IO ()
-log opt msg
-  | debug opt = putStrLn msg
+log o msg
+  | debug o = putStrLn msg
   | otherwise = return ()

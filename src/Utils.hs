@@ -11,7 +11,7 @@ import qualified Data.ByteString.Base16  as B16
 import qualified Data.ByteString.Lazy    as LBS
 import qualified Data.ByteString.UTF8    as UTF8
 import           Data.List               (unfoldr)
-import           Data.Maybe              (isJust, fromJust)
+import           Data.Maybe              (fromJust, isJust)
 import qualified Data.Word8              as W
 import           Numeric                 (readHex)
 import qualified System.Random           as R

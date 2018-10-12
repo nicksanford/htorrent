@@ -9,8 +9,6 @@ import           Control.DeepSeq
 import qualified Data.ByteString         as BS
 import qualified Data.ByteString.UTF8    as UTF8
 import qualified Data.List.NonEmpty      as NonEmptyL
-import qualified Data.Sequence           as Seq
-import qualified Data.Word8              as W
 import           GHC.Generics            (Generic)
 import           Network.Socket
 import qualified System.Clock            as Clock
@@ -19,6 +17,7 @@ data Opt = Opt { tracker      :: String
                , debug        :: Bool
                , port         :: Integer
                , quitWhenDone :: Bool
+               , maybeWSPort  :: Maybe Int
                } deriving (Eq)
 
 -- TODO - It might be a good idea to unify the multiple types of blocks into a single type.
@@ -32,7 +31,7 @@ data BlockRequest = BlockRequest { bIndex     :: Integer
 
 data PieceRequest = PieceRequest { preqIndex :: Integer
                                  , preqBlockRequests :: NonEmptyL.NonEmpty BlockRequest
-                                 } deriving (Eq, Show)
+                                 } deriving (Eq, Show, Generic)
 
 data PieceResponse = PieceResponse { presIndex    :: Integer
                                    , piecePayload :: BS.ByteString
@@ -50,7 +49,7 @@ data ResponseMessage = Failed PieceRequest
                      | CheckOut PeerThreadId PieceIndex Clock.TimeSpec
                      | CheckPeers
                      | CheckWork
-                     deriving (Eq, Show)
+                     deriving (Eq, Show, Generic)
 
 
 data FSMState = FSMState { fsmId        :: BS.ByteString
@@ -60,7 +59,8 @@ data FSMState = FSMState { fsmId        :: BS.ByteString
                          , getSelf      :: SelfState
                          , workChan     :: Chan.Chan PieceRequest
                          , responseChan :: Chan.Chan ResponseMessage
-                         , rpcParse     :: PeerRPCParse
+                         , unparsedRPCs :: BS.ByteString
+                         , parsedRPCs   :: [PeerRPC]
                          , initiator    :: Initiator
                          , opt          :: Opt
                          }
@@ -72,25 +72,20 @@ data Initiator = SelfInitiated
 
 data Peer = Peer { pIP   :: BS.ByteString
                  , pPort :: Integer
-                 } deriving (Eq, Show)
+                 } deriving (Eq, Show, Generic)
 
 data PeerResponse = PeerResponse { prInfoHash :: BS.ByteString
                                  , prPeerId   :: BS.ByteString
                                  } deriving (Eq, Show, Generic, NFData)
 
 
-data PeerRPCParse = PeerRPCParse { pRPCUnparsed :: Seq.Seq W.Word8
-                                 , pRPCError    :: Maybe BS.ByteString
-                                 , pRPCParsed   :: [PeerRPC]
-                                 } deriving (Eq, Generic, NFData)
-
 data PeerRPC = PeerKeepAlive
              | Choke
              | UnChoke
              | Interested
              | NotInterested
-             | Have BS.ByteString
-             | BitField PieceMap
+             | Have Integer
+             | BitField [Bool]
              | Cancel Integer Integer Integer
              | Request BlockRequest
              | Response BlockResponse
@@ -105,7 +100,7 @@ data PeerState = PeerState { peerId                   :: BS.ByteString
                            , lastHeartBeat            :: Maybe Clock.TimeSpec
                            , lastKeepAlive            :: Clock.TimeSpec
                            }
-              deriving (Eq)
+              deriving (Eq, Generic)
 
 instance Show PeerState where
   show a = "PeerState { " <> "peerId = " <> UTF8.toString (peerId a) <> ", "
@@ -143,7 +138,7 @@ instance Show SelfState where
 data SingleFileInfo = SingleFileInfo { sfName        :: BS.ByteString
                                      , sfLength      :: Integer
                                      , sfMaybeMD5Sum :: Maybe BS.ByteString
-                                     } deriving (Eq, Show)
+                                     } deriving (Eq, Show, Generic)
 
 data DirectoryInfo = DirectoryInfo { diName  :: BS.ByteString
                                    , diFiles :: [SingleFileInfo]
@@ -159,7 +154,7 @@ data Tracker = Tracker { tPeerId             :: BS.ByteString
                        , tSingleFileInfo     :: SingleFileInfo
                        , tMaybeDirectoryInfo :: Maybe DirectoryInfo
                        , tMaybeEncoding      :: Maybe BS.ByteString
-                       } deriving (Eq, Show)
+                       } deriving (Eq, Show, Generic)
 
 data TrackerResponse = TrackerResponse { trPeers            :: [Peer]
                                        , trInterval         :: Integer
@@ -191,12 +186,9 @@ instance Show FSMState where
                    <> "getConn: "        <> (show $ getConn a) <> ",\n"
                    <> "getPeer: "        <> (show $ getPeer a) <> ",\n"
                    <> "getSelf: "        <> (show $ getSelf a) <> ",\n"
-                   <> "rpcParse: "       <> (show $ rpcParse a) <> ",\n"
-                   <> "initiator: "       <> (show $ initiator a)
+                   <> "parsedRPCs: "     <> (show $ parsedRPCs a) <> ",\n"
+                   <> "initiator: "      <> (show $ initiator a)
                    <> "}"
-
-instance Show PeerRPCParse where
-  show (PeerRPCParse word8s m rpcs) = "PeerRPCParse : " <> (show $ Seq.length word8s) <> " " <> show m <> " " <> show rpcs
 
 blockSize :: Integer
 blockSize = (2::Integer)^(14::Integer) -- 16k
@@ -208,6 +200,6 @@ fsmLog fsmState msg
   | otherwise = return ()
 
 log :: Opt -> String -> IO ()
-log opt msg
-  | debug opt = putStrLn msg
+log o msg
+  | debug o = putStrLn msg
   | otherwise = return ()

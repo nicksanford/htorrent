@@ -12,22 +12,20 @@ import           Network.Socket.ByteString (recv, sendAll)
 import qualified System.Clock              as Clock
 
 import           FSM
-import qualified Peer
 import           RPCMessages               (handshake, interested,
                                             readHandShake, unchoke,
                                             validateHandshake)
 import           Shared
-import           Tracker
 
 start :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
-start opt tracker workC responseChan broadcastChan pieceMap = do
-  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show $ port opt)
+start o t workC responseC _broadcastC pieceMap = do
+  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show $ port o)
   E.bracket (addrIO >>= open) close loop
 
   where hints = defaultHints { addrSocketType = Stream
                              , addrFlags = [AI_PASSIVE]
                              }
-        addrIO = getAddrInfo (Just hints) Nothing (Just $ show $ port opt) >>= return . head
+        addrIO = getAddrInfo (Just hints) Nothing (Just $ show $ port o) >>= return . head
         open addr = do
           sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
           -- Solves issue withNetwork.Socket.bind: resource busy (Address already in use)
@@ -39,20 +37,20 @@ start opt tracker workC responseChan broadcastChan pieceMap = do
 
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          when (debug opt) $
+          when (debug o) $
             putStrLn $ "LOOP: Accepted connection " <> show conn
                                                     <> " from "
                                                     <> show peer
                                                     <> "\nBlocking until handshake is received"
 
-          let threadEndHandler _ = when (debug opt) (putStrLn ("closing " <> show conn <> "  from " <> show peer))
+          let threadEndHandler _ = when (debug o) (putStrLn ("closing " <> show conn <> "  from " <> show peer))
                                    >> close conn
           void $ forkFinally (talk conn peer) threadEndHandler
 
         talk conn peer = do
           msg <- recv conn 68
-          let maybeHandshakeResponse = readHandShake msg >>= validateHandshake tracker
-          when (debug opt) $
+          let maybeHandshakeResponse = readHandShake msg >>= validateHandshake t
+          when (debug o) $
             putStrLn $ "Peer " <> show peer
                               <> " sent handshake "
                               <> show maybeHandshakeResponse
@@ -62,11 +60,11 @@ start opt tracker workC responseChan broadcastChan pieceMap = do
 
           case maybeHandshakeResponse of
             Just peerResponse -> do
-              let handshakeBS = handshake (tInfoHash tracker) (tPeerId tracker)
+              let handshakeBS = handshake (tInfoHash t) (tPeerId t)
               sendAll conn handshakeBS
               let bf = pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              let fsmState = buildFSMState opt tracker (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseChan time pieceMap PeerInitiated
+              let fsmState = buildFSMState o t (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseC time pieceMap PeerInitiated
               fsmLog fsmState $ " got handshake: " <> show (BS.unpack bf)
                                                        <> " along with interested & unchoke messages "
               fsmLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
@@ -77,7 +75,7 @@ start opt tracker workC responseChan broadcastChan pieceMap = do
               let handleException e = fsmLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
               E.catch (recvLoop fsmState) handleException
             Nothing -> do
-              when (debug opt) $
+              when (debug o) $
                 putStrLn $ "Peer " <> show peer
                                   <> " got invalid handshake response "
                                   <> show maybeHandshakeResponse

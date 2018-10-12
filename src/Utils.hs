@@ -11,7 +11,7 @@ import qualified Data.ByteString.Base16  as B16
 import qualified Data.ByteString.Lazy    as LBS
 import qualified Data.ByteString.UTF8    as UTF8
 import           Data.List               (unfoldr)
-import           Data.Maybe              (isJust)
+import           Data.Maybe              (fromJust, isJust)
 import qualified Data.Word8              as W
 import           Numeric                 (readHex)
 import qualified System.Random           as R
@@ -78,12 +78,13 @@ nanoSectoSec = flip div 1000000000
 showPeerId :: BS.ByteString -> String
 showPeerId = UTF8.toString . B16.encode
 
-bigEndianToInteger :: [Binary.Word8] -> Maybe Binary.Word32
-bigEndianToInteger xs =
-  if length xs == 4 then
-    Just $ Binary.decode $ LBS.fromStrict $ BS.pack xs
-  else
-    Nothing
+bigEndianToInteger :: BS.ByteString -> Maybe Binary.Word32
+bigEndianToInteger xs
+  | BS.length xs == 4 = Just $ Binary.decode $ LBS.fromStrict xs
+  | otherwise         = Nothing
 
-integerToBigEndian :: Binary.Word32 -> [W.Word8]
-integerToBigEndian = BS.unpack . LBS.toStrict . Binary.encode
+partialToBigEndian :: Num a => BS.ByteString -> a
+partialToBigEndian = fromIntegral . fromJust . bigEndianToInteger
+
+integerToBigEndian :: Binary.Word32 -> BS.ByteString
+integerToBigEndian = LBS.toStrict . Binary.encode

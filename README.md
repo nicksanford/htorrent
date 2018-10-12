@@ -41,10 +41,11 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - [x] Tracks which pieces each peer has by parsing have & bitfield messages.
 - [x] Support for large single files
 - [x] Signal handling for Ctrl-C & clean shutdown
+- [x] Refactor Parser module to use attoparsec as profiling discovered explicit fold / unfold parser to be the current bottleneck
 
 ### TODO (next to be implemented):
-- Refactor Parser module to use attoparsec as profiling discovered explicit fold / unfold parser to be the current bottleneck
 - Publishing have messages to all peers as pieces complete
+- Provide visualization (presentation mode)
 - Fix issue where if the tracker server doesn't exist, it does not just blow up. Report back `HTTP Call 'http call' to tracker server 'tracker server url'`
 - Add CI/CD
 
@@ -60,7 +61,6 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - Property tests for RPC parser
 - Provide ability to get debug logging
 - Provide option to exit on completion
-- Provide visualization (presentation mode)
 - Requesting tracker for more peers when HTorrent runs low on peers
 - Resolve all compiler warnings
 - Support for WebSeeds http://techie-buzz.com/how-to/what-are-web-seeds-bittorrent.html

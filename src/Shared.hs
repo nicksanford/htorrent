@@ -61,7 +61,8 @@ data FSMState = FSMState { fsmId        :: BS.ByteString
                          , getSelf      :: SelfState
                          , workChan     :: Chan.Chan PieceRequest
                          , responseChan :: Chan.Chan ResponseMessage
-                         , rpcParse     :: PeerRPCParse
+                         , unparsedRPCs :: BS.ByteString
+                         , parsedRPCs   :: [PeerRPC]
                          , initiator    :: Initiator
                          , opt          :: Opt
                          }
@@ -90,8 +91,8 @@ data PeerRPC = PeerKeepAlive
              | UnChoke
              | Interested
              | NotInterested
-             | Have BS.ByteString
-             | BitField PieceMap
+             | Have Integer
+             | BitField [Bool] 
              | Cancel Integer Integer Integer
              | Request BlockRequest
              | Response BlockResponse
@@ -192,8 +193,8 @@ instance Show FSMState where
                    <> "getConn: "        <> (show $ getConn a) <> ",\n"
                    <> "getPeer: "        <> (show $ getPeer a) <> ",\n"
                    <> "getSelf: "        <> (show $ getSelf a) <> ",\n"
-                   <> "rpcParse: "       <> (show $ rpcParse a) <> ",\n"
-                   <> "initiator: "       <> (show $ initiator a)
+                   <> "parsedRPCs: "     <> (show $ parsedRPCs a) <> ",\n"
+                   <> "initiator: "      <> (show $ initiator a)
                    <> "}"
 
 instance Show PeerRPCParse where

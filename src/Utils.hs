@@ -11,7 +11,7 @@ import qualified Data.ByteString.Base16  as B16
 import qualified Data.ByteString.Lazy    as LBS
 import qualified Data.ByteString.UTF8    as UTF8
 import           Data.List               (unfoldr)
-import           Data.Maybe              (isJust)
+import           Data.Maybe              (isJust, fromJust)
 import qualified Data.Word8              as W
 import           Numeric                 (readHex)
 import qualified System.Random           as R
@@ -82,6 +82,9 @@ bigEndianToInteger :: BS.ByteString -> Maybe Binary.Word32
 bigEndianToInteger xs
   | BS.length xs == 4 = Just $ Binary.decode $ LBS.fromStrict xs
   | otherwise         = Nothing
+
+partialToBigEndian :: Num a => BS.ByteString -> a
+partialToBigEndian = fromIntegral . fromJust . bigEndianToInteger
 
 integerToBigEndian :: Binary.Word32 -> BS.ByteString
 integerToBigEndian = LBS.toStrict . Binary.encode

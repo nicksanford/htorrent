@@ -103,8 +103,9 @@ handleResponseMsg fileManagerState response = case response of
       let index = presIndex pr
       let newCo = M.delete index checkouts
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
+      let newUnfulfilledPieceRequests = filteredWorkToBeDone (fmUnfulfilledPieceRequests fileManagerState) newPM
       maybe (return ()) (\wsChan -> Chan.writeChan wsChan $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ index) $ fmMaybeWSChan fileManagerState
-      return $ fileManagerState {fmPieceMap = newPM, fmCheckouts = newCo}
+      return $ fileManagerState {fmPieceMap = newPM, fmCheckouts = newCo, fmUnfulfilledPieceRequests = newUnfulfilledPieceRequests}
 
     (Error p) -> do
       let newFMPeers = filter (/=p) $ fmPeers fileManagerState
@@ -168,12 +169,26 @@ calculatePercentageDone fileManagerState =
       totalNumberOfPieces = (fromIntegral $ length pieceMap)
   in floor $ (numberOfDownloadedPieces / totalNumberOfPieces) * 100
 
+-- data FileManagerState = FileManagerState { fmOpt :: Opt
+--                                          , fmTracker :: Tracker
+--                                          , fmPieceRequest :: Chan.Chan PieceRequest
+--                                          , fmResponseChan :: Chan.Chan ResponseMessage
+--                                          , fmMaybeWSChan :: Maybe (Chan.Chan Text)
+--                                          , fmKillChan :: Chan.Chan String
+--                                          , fmPeers :: [Peer]
+--                                          , fmPieceMap :: PieceMap
+--                                          , fmCheckouts :: M.Map Integer (PeerThreadId, Clock.TimeSpec)
+--                                          , fmUnfulfilledPieceRequests :: [PieceRequest]
+--                                          }
 loop :: FileManagerState -> IO ()
 loop oldFileManagerState = do
   response <- Chan.readChan $ fmResponseChan oldFileManagerState
 
   fileManagerState <- handleResponseMsg oldFileManagerState response
-  print $ "Downloaded " <> (show $ calculatePercentageDone fileManagerState) <> "%"
+  print $ "DOWNLOADED " <> (show $ calculatePercentageDone fileManagerState) <> "%"
+  -- print $ "PEERS: " <> (show $ fmPeers fileManagerState) <> "%"
+  -- print $ "FMCHECKOUTS: " <> (show $ fmCheckouts fileManagerState) <> "%"
+  -- print $ "FMUNFULFILLEDPIECEREQUESTS: " <> (show $ fmUnfulfilledPieceRequests fileManagerState) <> "%"
   when (allPiecesWritten (fmPieceMap fileManagerState) && quitWhenDone (fmOpt fileManagerState)) $
     Chan.writeChan (fmKillChan fileManagerState) "DONE!"
 
@@ -258,13 +273,16 @@ start tracker opt killChan = do
 
   let workToBeDone :: [PieceRequest]
       workToBeDone = getPieceList tracker
-  let filteredWorkToBeDone = fst <$> filter (not . snd . snd) (zip workToBeDone pieceMap)
-  Chan.writeList2Chan workC filteredWorkToBeDone
+  let unfulfilledPieceRequests = filteredWorkToBeDone workToBeDone pieceMap
+  Chan.writeList2Chan workC unfulfilledPieceRequests
   maybe (return ()) (\wsPort -> do
                         void $ forkIO $ WebSocket.start wsPort wsC
                         Chan.writeChan wsC $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ snd <$> pieceMap
                     ) maybeWSP
-  loop $ FileManagerState opt tracker workC responseC maybeWSC killChan peers pieceMap M.empty filteredWorkToBeDone
+  loop $ FileManagerState opt tracker workC responseC maybeWSC killChan peers pieceMap M.empty unfulfilledPieceRequests
+
+filteredWorkToBeDone :: [PieceRequest] -> PieceMap -> [PieceRequest]
+filteredWorkToBeDone pieceRequest pieceMap = fst <$> filter (not . snd . snd) (zip pieceRequest pieceMap)
 
 checkoutTimer :: Chan.Chan ResponseMessage -> IO ()
 checkoutTimer responseC = do

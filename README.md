@@ -45,6 +45,7 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - [x] Publishing have messages to all peers as pieces complete
 
 ### TODO (next to be implemented):
+- Create a file split option which, given a tacker an integer and the torrented content, will split up the file in to the number of equal pieces provided in the integer parameter. This will assist in testing that have messages are broadcast to all peers.
 - Provide visualization (presentation mode)
 - Fix issue where if the tracker server doesn't exist, it does not just blow up. Report back `HTTP Call 'http call' to tracker server 'tracker server url'`
 - Add CI/CD

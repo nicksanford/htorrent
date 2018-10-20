@@ -3,10 +3,14 @@
 {-# LANGUAGE TupleSections     #-}
 
 module FileManager where
-import           Control.Concurrent                           (ThreadId,
-                                                               forkFinally,
-                                                               forkIO,
-                                                               threadDelay)
+import           Control.Concurrent                           ( ThreadId
+                                                              , forkFinally
+                                                              , forkIO
+                                                              , threadDelay
+                                                              , newMVar
+                                                              , modifyMVar
+                                                              , MVar (..)
+                                                              )
 import qualified Control.Concurrent.Chan                      as Chan
 import           Control.DeepSeq                              (rnf)
 import qualified Control.Exception                            as E
@@ -16,6 +20,7 @@ import qualified Data.ByteString                              as BS
 import qualified Data.ByteString.Lazy                         as LBS
 import qualified Data.ByteString.UTF8                         as UTF8
 import qualified Data.List                                    as L
+import qualified Data.Set                                     as Set
 import qualified Data.List.NonEmpty                           as NonEmptyL
 import qualified Data.Map                                     as M
 import           Data.Maybe                                   (fromJust,
@@ -36,18 +41,18 @@ import           Utils                                        (shaHashRaw)
 import qualified WebSocket
 
 
-data FileManagerState = FileManagerState { fmOpt :: Opt
-                                         , fmTracker :: Tracker
-                                         , fmPieceRequest :: Chan.Chan PieceRequest
-                                         , fmResponseChan :: Chan.Chan ResponseMessage
-                                         , fmMaybeWSChan :: Maybe (Chan.Chan Text)
-                                         , fmKillChan :: Chan.Chan String
-                                         , fmPeers :: [Peer]
-                                         , fmPieceMap :: PieceMap
-                                         , fmCheckouts :: M.Map Integer (PeerThreadId, Clock.TimeSpec)
+data FileManagerState = FileManagerState { fmOpt                      :: Opt
+                                         , fmTracker                  :: Tracker
+                                         , fmPieceRequest             :: Chan.Chan PieceRequest
+                                         , fmResponseChan             :: Chan.Chan ResponseMessage
+                                         , fmMaybeWSChan              :: Maybe (Chan.Chan Text)
+                                         , fmKillChan                 :: Chan.Chan String
+                                         , fmPeers                    :: [Peer]
+                                         , fmPieceMap                 :: PieceMap
+                                         , fmCheckouts                :: M.Map Integer (PeerThreadId, Clock.TimeSpec)
                                          , fmUnfulfilledPieceRequests :: [PieceRequest]
+                                         , fmHaveIntIdxMvar           :: MVar (Set.Set Integer)
                                          }
-
 getDefaultPieceMap :: Tracker -> [(BS.ByteString, Bool)]
 getDefaultPieceMap t = (, False) <$> tPieceHashes t
 
@@ -100,6 +105,10 @@ handleResponseMsg fileManagerState response = case response of
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == index then (k,True) else (k,v)) <$> zip [0..] pieceMap
       let newUnfulfilledPieceRequests = filteredWorkToBeDone (fmUnfulfilledPieceRequests fileManagerState) newPM
       maybe (return ()) (\wsChan -> Chan.writeChan wsChan $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ index) $ fmMaybeWSChan fileManagerState
+      updatedHaveSet <- modifyMVar (fmHaveIntIdxMvar fileManagerState) (\set -> return (Set.insert index set, Set.insert index set))
+      when (debug $ fmOpt fileManagerState) $
+        print $ "RESPONSE CHANNEL: have set updated to " <> show updatedHaveSet
+      
       return $ fileManagerState {fmPieceMap = newPM, fmCheckouts = newCo, fmUnfulfilledPieceRequests = newUnfulfilledPieceRequests}
 
     (Error p) -> do
@@ -215,9 +224,9 @@ downloadedSoFar t pieceMap = do
   else
     (fromIntegral $ length $ filter snd pieceMap) * tPieceLength t
 
-forkPeer :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> Peer -> IO ThreadId
-forkPeer o t workChan responseChan broadcastChan pieceMap peer =
-  forkFinally (Peer.start o t peer workChan responseChan broadcastChan pieceMap) (errorHandler o peer responseChan)
+forkPeer :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> MVar (Set.Set Integer) -> Peer -> IO ThreadId
+forkPeer o t workChan responseChan broadcastChan pieceMap haveMVar peer =
+  forkFinally (Peer.start o t peer workChan responseChan broadcastChan pieceMap haveMVar) (errorHandler o peer responseChan) 
 
 errorHandler :: (Show a, Show b) => Opt -> Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
 errorHandler o peer chan (Left x) = do
@@ -241,7 +250,8 @@ start t o killChan = do
   wsC <- Chan.newChan
   let maybeWSC = const wsC <$> maybeWSP
 
-  _ <- forkIO $ Server.start o t workC responseC broadcastC pieceMap
+  haveMVar <- newMVar Set.empty
+  _ <- forkIO $ Server.start o t workC responseC broadcastC pieceMap haveMVar
 
   maybeTrackerResponse <- trackerRequest t o (downloadedSoFar t pieceMap)
   when (isNothing maybeTrackerResponse) $
@@ -251,7 +261,7 @@ start t o killChan = do
   let peers = trPeers trackerResponse
 
   l "spawning child threads for peers"
-  mapM_ (forkPeer o t workC responseC broadcastC pieceMap) peers
+  mapM_ (forkPeer o t workC responseC broadcastC pieceMap haveMVar) peers
   _ <- forkIO $ checkoutTimer responseC
 
   let workToBeDone :: [PieceRequest]
@@ -262,7 +272,7 @@ start t o killChan = do
                         void $ forkIO $ WebSocket.start wsPort wsC
                         Chan.writeChan wsC $ TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode $ snd <$> pieceMap
                     ) maybeWSP
-  loop $ FileManagerState o t workC responseC maybeWSC killChan peers pieceMap M.empty unfulfilledPieceRequests
+  loop $ FileManagerState o t workC responseC maybeWSC killChan peers pieceMap M.empty unfulfilledPieceRequests haveMVar
 
 filteredWorkToBeDone :: [PieceRequest] -> PieceMap -> [PieceRequest]
 filteredWorkToBeDone pieceRequest pieceMap = fst <$> filter (not . snd . snd) (zip pieceRequest pieceMap)

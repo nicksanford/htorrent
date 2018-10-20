@@ -1,7 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Server (start) where
 
-import           Control.Concurrent        (forkFinally)
+import           Control.Concurrent        ( forkFinally
+                                           , MVar(..)
+                                           )
+import qualified Data.Set                  as Set
 import           Control.Concurrent.Chan   as Chan
 import qualified Control.Exception         as E
 import           Control.Monad             (forever, void, when)
@@ -17,8 +20,8 @@ import           RPCMessages               (handshake, interested,
                                             validateHandshake)
 import           Shared
 
-start :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
-start o t workC responseC _broadcastC pieceMap = do
+start :: Opt -> Tracker -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> MVar (Set.Set Integer)-> IO ()
+start o t workC responseC _broadcastC pieceMap haveMVar = do
   putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show $ port o)
   E.bracket (addrIO >>= open) close loop
 
@@ -64,7 +67,7 @@ start o t workC responseC _broadcastC pieceMap = do
               sendAll conn handshakeBS
               let bf = pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              let fsmState = buildFSMState o t (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseC time pieceMap PeerInitiated
+              let fsmState = buildFSMState o t (UTF8.fromString $ show peer) (prPeerId peerResponse) conn workC responseC time pieceMap PeerInitiated haveMVar
               fsmLog fsmState $ " got handshake: " <> show (BS.unpack bf)
                                                        <> " along with interested & unchoke messages "
               fsmLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)

@@ -10,9 +10,16 @@ module FSM ( recvLoop
            ) where
 
 import           Control.Concurrent.Chan                      as Chan
+import           Control.Concurrent                           ( MVar (..)
+                                                              , readMVar
+                                                              , isEmptyMVar 
+                                                              )
 import           Control.DeepSeq                              (rnf)
+import qualified Data.Set                                     as Set
 import qualified Control.Exception                            as E
-import           Control.Monad                                (when)
+import           Control.Monad                                ( when
+                                                              , forM_
+                                                              )
 import qualified Data.Bits.Bitwise                            as Bitwise
 import qualified Data.ByteString                              as BS
 import qualified Data.ByteString.UTF8                         as UTF8
@@ -26,8 +33,10 @@ import           Data.Maybe                                   (fromMaybe,
 import           Network.Socket                               hiding (recv)
 import           Network.Socket.ByteString                    (recv, sendAll)
 import           Parser                                       (rpcParse)
-import           RPCMessages                                  (keepAlive,
-                                                               request)
+import           RPCMessages                                  ( keepAlive
+                                                              , request
+                                                              , have
+                                                              )
 import           Shared
 import qualified System.Clock                                 as Clock
 import qualified System.Posix.IO                              as PosixIO
@@ -38,12 +47,13 @@ import           Utils
 requestLimit :: Int
 requestLimit = 10
 
-buildFSMState :: Opt -> Tracker -> BS.ByteString -> BS.ByteString -> Socket -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Clock.TimeSpec -> PieceMap -> Initiator -> FSMState
-buildFSMState o t fsmStateId peerID conn workC responseC time pieceMap fsmInitiator =
+buildFSMState :: Opt -> Tracker -> BS.ByteString -> BS.ByteString -> Socket -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Clock.TimeSpec -> PieceMap -> Initiator -> MVar (Set.Set Integer) -> FSMState
+buildFSMState o t fsmStateId peerID conn workC responseC time pieceMap fsmInitiator haveMVar =
   let selfState = SelfState { selfId                   = (tPeerId t)
                             , selfPieceMap             = pieceMap
                             , selfChokingPeer          = False
                             , selfInterestedInPeer     = True
+                            , selfHaveIdxsSent         = Set.empty
                             }
 
       peerState = PeerState { peerId                   = peerID
@@ -55,28 +65,47 @@ buildFSMState o t fsmStateId peerID conn workC responseC time pieceMap fsmInitia
                             , lastHeartBeat            = Nothing
                             , lastKeepAlive            = time
                             }
-  in FSMState fsmStateId t conn peerState selfState workC responseC "" [] fsmInitiator o
+  in FSMState fsmStateId t conn peerState selfState workC responseC "" [] fsmInitiator o haveMVar
+
+-- TODO Only send have msgs if they don't have the pieces
+sendMessages :: FSMState -> [BS.ByteString] -> IO ()
+sendMessages fsmState =
+  mapM_ (sendAll (getConn fsmState))
+
+getHavesToSend :: FSMState -> Set.Set Integer -> (FSMState, [BS.ByteString])
+getHavesToSend fsmState completedHaves =
+  let self = getSelf fsmState
+      sentHaves = selfHaveIdxsSent self
+      notSentYet = Set.difference completedHaves sentHaves
+      havesToSend = (have . integerToBigEndian . fromIntegral) <$> (Set.toList notSentYet)
+      newSelf = self { selfHaveIdxsSent = Set.union sentHaves completedHaves }
+  in (fsmState { getSelf = newSelf }, havesToSend)
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
 recvLoop :: FSMState -> IO ()
 --recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) pieceMap) peerRPCParse workChan responseChan currentWork = do
-recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse peerRPCParse) _ _ _ _ (TimeStamps (_, (LastKeepAlive lastKeepAlive))) pieces) = do
+recvLoop oldFSMState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse peerRPCParse) _ _ _ _ (TimeStamps (_, (LastKeepAlive lastKeepAlive))) pieces) = do
   -- TODO If anything throws, catch it, put the work back in the response queue for the parent thread
-  let peerState = getPeer fsmState
-  let conn = getConn fsmState
-  fsmLog fsmState $ "Blocked on recvLoop, peerState: " <> (show fsmState)
-  fsmLog fsmState $ "RPCMSG: " <> ((show . parsedRPCs) fsmState)
+  let peerState = getPeer oldFSMState
+  let conn = getConn oldFSMState
+  fsmLog oldFSMState $ "Blocked on recvLoop, peerState: " <> (show oldFSMState)
+  fsmLog oldFSMState $ "RPCMSG: " <> ((show . parsedRPCs) oldFSMState)
   -- TODO If this is null but you still have checked out work, put the work back, I'm pretty sure I only need to do this on recv calls
 
   now <- Clock.getTime Clock.Monotonic
   let newlastKeepAlive = (newKeepAlive now $ lastKeepAlive peerState)
   when (newlastKeepAlive == now) $ sendAll conn keepAlive
 
-  msg <- recv conn 16384
---  BS.appendFile (UTF8.toString $ "./vcr/" <> fsmId fsmState) msg
+  isEmptyMVar (haveMVar oldFSMState) >>= print
+  completedHaves <- readMVar (haveMVar oldFSMState)
+  fsmLog oldFSMState $ "COMPLETEDHAVES: " <> (show $ completedHaves)
+  fsmLog oldFSMState $ "SENTHAVES: " <> (show $ selfHaveIdxsSent $ getSelf oldFSMState)
+  let (fsmState, haveMsgs) = getHavesToSend oldFSMState  completedHaves
+  fsmLog fsmState $ "SENDING HAVE MSGS: " <> (show $ rpcParse "" (BS.concat haveMsgs))
+  _ <- sendMessages fsmState haveMsgs
 
---  fsmLog  fsmState $ " msg: " <> (show $ BS.unpack msg)
-  --let newPeerRPCParse = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState
+  msg <- recv conn 16384
+
   let eitherNewRPCParse = rpcParse (unparsedRPCs fsmState) msg
   E.evaluate $ rnf eitherNewRPCParse
 

@@ -42,9 +42,9 @@ I also wanted to learn about parsing, bit manipulation, socket programming, prop
 - [x] Support for large single files
 - [x] Signal handling for Ctrl-C & clean shutdown
 - [x] Refactor Parser module to use attoparsec as profiling discovered explicit fold / unfold parser to be the current bottleneck
+- [x] Publishing have messages to all peers as pieces complete
 
 ### TODO (next to be implemented):
-- Publishing have messages to all peers as pieces complete
 - Provide visualization (presentation mode)
 - Fix issue where if the tracker server doesn't exist, it does not just blow up. Report back `HTTP Call 'http call' to tracker server 'tracker server url'`
 - Add CI/CD

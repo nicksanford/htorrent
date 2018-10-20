@@ -5,6 +5,7 @@
 module Shared where
 
 import qualified Control.Concurrent.Chan as Chan
+import           Control.Concurrent     (MVar (..))
 import           Control.DeepSeq
 import qualified Data.ByteString         as BS
 import qualified Data.ByteString.UTF8    as UTF8
@@ -12,6 +13,7 @@ import qualified Data.List.NonEmpty      as NonEmptyL
 import           GHC.Generics            (Generic)
 import           Network.Socket
 import qualified System.Clock            as Clock
+import qualified Data.Set                                     as Set
 
 data Opt = Opt { tracker      :: String
                , debug        :: Bool
@@ -63,6 +65,7 @@ data FSMState = FSMState { fsmId        :: BS.ByteString
                          , parsedRPCs   :: [PeerRPC]
                          , initiator    :: Initiator
                          , opt          :: Opt
+                         , haveMVar     :: MVar (Set.Set Integer)
                          }
                          deriving (Eq)
 
@@ -125,6 +128,7 @@ data SelfState = SelfState { selfId               :: BS.ByteString
                            , selfPieceMap         :: PieceMap
                            , selfChokingPeer      :: Bool
                            , selfInterestedInPeer :: Bool
+                           , selfHaveIdxsSent     :: Set.Set Integer
                            } deriving (Eq)
 
 instance Show SelfState where

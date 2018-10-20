@@ -5,6 +5,7 @@
 module Peer where
 
 import qualified Control.Concurrent.Chan                      as Chan
+import           Control.Concurrent                           (MVar (..))
 import           Control.DeepSeq
 import qualified Control.Exception                            as E
 import           Control.Monad                                (forM_, unless,
@@ -27,7 +28,7 @@ import           Data.Maybe                                   (fromJust,
                                                                isNothing,
                                                                listToMaybe)
 import qualified Data.Sequence                                as Seq
-import qualified Data.Set                                     as S
+import qualified Data.Set                                     as Set
 import           FSM
 import           Network.Socket                               hiding (recv)
 import           Network.Socket.ByteString                    (recv, send,
@@ -44,8 +45,8 @@ import           System.Timeout                               (timeout)
 import           Utils                                        (shaHashRaw,
                                                                unhex)
 
-start :: Opt -> Tracker -> Peer -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
-start opt tracker peer workC responseChan broadcastC pieceMap =  do
+start :: Opt -> Tracker -> Peer -> Chan.Chan PieceRequest -> Chan.Chan ResponseMessage -> Chan.Chan a -> PieceMap -> MVar (Set.Set Integer) -> IO ()
+start opt tracker peer workC responseChan broadcastC pieceMap haveMVar =  do
   when (debug opt) $
     putStrLn $ "Initiating handshake with " <> show peer
   maybePeerResponse <- initiateHandshake tracker peer
@@ -61,7 +62,7 @@ start opt tracker peer workC responseChan broadcastC pieceMap =  do
     sendAll conn unchoke
     time <- Clock.getTime Clock.Monotonic
     let threadId = pIP peer <> (UTF8.fromString $ show $ pPort peer)
-    let fsmState = buildFSMState opt tracker threadId (prPeerId peerResponse) conn workC responseChan time pieceMap SelfInitiated
+    let fsmState = buildFSMState opt tracker threadId (prPeerId peerResponse) conn workC responseChan time pieceMap SelfInitiated haveMVar
     fsmLog fsmState $ " Starting recvLoop"
     E.catch (recvLoop fsmState) (\e -> do
                                     fsmLog fsmState $ " HIT EXCEPTION " <> (show (e :: E.SomeException))
